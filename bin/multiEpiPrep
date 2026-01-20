@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/lib/common.sh"
+
+tool="multiEpiPrep"
+cmd="${1:-help}"
+shift || true
+
+case "$cmd" in
+  help|-h|--help)
+    cat <<'EOF'
+multiEpiPrep: a multi-command CLI
+
+Usage:
+  multiEpiPrep <command> [options]
+
+Commands:
+  demux   Demultiplex pooled FASTQ files into barcode-pair-specific FASTQ files
+  align   Align FASTQ reads to the reference genome and generate BAM files
+  qc      Perform quality control on BAM files
+  frag    Convert aligned BAM files to fragment-level BED files
+  cov     Compute genome-wide coverage and convert BED to bedGraph
+  track   Generate genome browser tracks by converting bedGraph to bigWig
+EOF
+    ;;
+  demux|align|qc|frag|cov|track)
+    bash "$ROOT/commands/${cmd}.sh" "$@"
+    ;;
+  *)
+    die "Unknown command: $cmd. Run: $tool help"
+    ;;
+esac
