@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/bin/utils.sh"
 
 # =========================
 # help message
@@ -17,7 +19,7 @@ Required:
 
 Optional:
   -e, --error    Max barcode mismatches for cutadapt (default: 2)
-  -j, --threads  Threads for cutadapt (default: 16)
+  -j, --threads  Threads for cutadapt (default: auto-detect)
   -h, --help     Show this help message and exit
 
 Output:
@@ -51,7 +53,7 @@ FWD_FASTA=""
 REV_FASTA=""
 OUT_DIR=""
 ERROR_RATE="2"
-THREADS="16"
+THREADS=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -141,14 +143,14 @@ if [[ ! -f "${REV_FASTA}" ]]; then
   exit 1
 fi
 
-# basic numeric validation
 if ! [[ "${ERROR_RATE}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
   echo "[ERROR] --error must be a number (e.g. 2)"
   exit 1
 fi
-if ! [[ "${THREADS}" =~ ^[0-9]+$ ]] || [[ "${THREADS}" -lt 1 ]]; then
-  echo "[ERROR] --threads must be a positive integer"
-  exit 1
+
+if [[ -z "$THREADS" ]] || ! [[ "${THREADS}" =~ ^[0-9]+$ ]] || [[ "${THREADS}" -lt 1 ]]; then
+  echo "Automatically detecting available CPU cores"
+  THREADS="$(get_cpu_cores)"
 fi
 
 # =========================
@@ -161,7 +163,18 @@ command -v find >/dev/null 2>&1 || { echo "[ERROR] find not found in PATH"; exit
 # =========================
 # output dir
 # =========================
-mkdir -p "${OUT_DIR}"
+if [[ -e "$OUT_DIR" ]]; then
+  if [[ -d "$OUT_DIR" && -z "$(ls -A "$OUT_DIR")" ]]; then
+    # exists and empty → OK
+    :
+  else
+    echo "[ERROR] Output directory exists and is not empty: $OUT_DIR" >&2
+    echo "Please remove it or choose a new one." >&2
+    exit 1
+  fi
+else
+  mkdir -p "$OUT_DIR"
+fi
 
 # =========================
 # main: cutadapt demultiplex
@@ -185,17 +198,58 @@ cutadapt \
 echo "[demux] cutadapt execution successful"
 
 # =========================
-# remove empty fastq.gz (default)
+# remove empty fastq.gz
 # =========================
 shopt -s nullglob
 fastqs=( "${OUT_DIR}"/*.fastq.gz )
-for fq in "${fastqs[@]}"; do
-  if ! gzip -cd -- "${fq}" 2>/dev/null | head -n 1 | grep -q .; then
-    rm -f -- "${fq}"
-  fi
-done
+drop_empty_files fastqs 1
 echo "[demux] removed empty FASTQ outputs"
 
+# =========================
+# merge symmetric fastq.gz
+# =========================
+declare -A FWD_BY_PREFIX
+declare -A REV_BY_PREFIX
+
+get_fastq_prefix fastqs FWD_BY_PREFIX REV_BY_PREFIX ".fastq.gz" || exit $?
+prefixes=( "${!FWD_BY_PREFIX[@]}" )
+
+for prefix in "${prefixes[@]}"; do
+  if [[ -z "${FWD_BY_PREFIX[$prefix]:-}" || -z "${REV_BY_PREFIX[$prefix]:-}" ]]; then
+    echo "[WARN] skip incomplete prefix: $prefix" >&2
+    continue
+  fi
+
+  target1="${prefix%%-*}"
+  target2="${prefix#*-}"
+  if [[ "$target1" == "$target2" ]]; then
+    continue
+  fi
+  if [[ "$target1" < "$target2" ]]; then
+    continue
+  fi
+
+  rev_prefix="${target2}-${target1}"
+  rev_r1="${FWD_BY_PREFIX[$prefix]}"
+  rev_r2="${REV_BY_PREFIX[$prefix]}"
+  
+  if [[ -n "${FWD_BY_PREFIX[$rev_prefix]:-}" && -n "${REV_BY_PREFIX[$rev_prefix]:-}" ]]; then
+    r1="${FWD_BY_PREFIX[$rev_prefix]}"
+    r2="${REV_BY_PREFIX[$rev_prefix]}"
+    tmp_r1="$(mktemp "${r1}.tmp.XXXX")"
+    tmp_r2="$(mktemp "${r2}.tmp.XXXX")"
+
+    gzip -cd "$r1" "$rev_r1" | gzip > "$tmp_r1"
+    gzip -cd "$r2" "$rev_r2" | gzip > "$tmp_r2"
+    mv "$tmp_r1" "$r1"
+    mv "$tmp_r2" "$r2"
+  else
+    new_r1="${OUT_DIR}/${rev_prefix}.R1.fastq.gz"
+    new_r2="${OUT_DIR}/${rev_prefix}.R2.fastq.gz"
+    mv -f -- "$rev_r1" "$new_r1"
+    mv -f -- "$rev_r2" "$new_r2"
+  fi
+done
 
 echo "[demux] R1 input  : ${R1_FASTQ}"
 echo "[demux] R2 input  : ${R2_FASTQ}"

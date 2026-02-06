@@ -17,7 +17,7 @@ Optional:
   -h, --help     Show this help message and exit
 
 Output:
-  OUT_DIR/bedgraph/*.bedGraph
+  OUT_DIR/*.bedGraph
 
 Description:
   Convert BED files to bedGraph coverage tracks using bedtools genomecov:
@@ -115,8 +115,7 @@ fi
 # =========================
 # output dir
 # =========================
-BG_DIR="${OUT_DIR}/bedgraph"
-mkdir -p "${BG_DIR}"
+mkdir -p "${OUT_DIR}"
 
 # =========================
 # main loop
@@ -130,11 +129,11 @@ fi
 
 for bed in "${bed_files[@]}"; do
   prefix=$(basename "$bed" .bed)
-  bg_path="${BG_DIR}/${prefix}.bedGraph"
+  bg_path="${OUT_DIR}/${prefix}.bedGraph"
   bedtools genomecov -bg -i "$bed" -g "${CHROM_SIZES}" > "${bg_path}"
 done
 
 echo "[cov] Input BED dir : ${BED_DIR}"
 echo "[cov] Genome        : ${REF_GENOME}"
-echo "[cov] Output dir    : ${BG_DIR}"
+echo "[cov] Output dir    : ${OUT_DIR}"
 echo "[cov] Done"

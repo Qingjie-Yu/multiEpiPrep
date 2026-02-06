@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/bin/utils.sh"
+
 # =========================
 # help message
 # =========================
@@ -15,11 +18,12 @@ Required:
   -g, --genome     Reference genome name (hg38 or mm10)
 
 Optional:
+  --trim-5p      Number of nucleotides to trim from 5' end of each read (default: 45)
   --min-len        Min fragment length for bowtie2 -I (default: 10)
   --max-len        Max fragment length for bowtie2 -X (default: 1300)
-  -p, --threads    Threads for bowtie2 (default: 8)
-  --java-mem       Java memory for Picard (default: 16g)
-  --picard-jar     Path to picard.jar (default: auto-detect via \$ROOT/bin/ref_prep.py get_picard_jar)
+  -p, --threads    Threads for bowtie2 (default: auto-detect)
+  --java-mem       Java memory for Picard (default: auto-detect)
+  --picard-jar     Path to picard.jar (default: auto-detect)
   -h, --help       Show this help message and exit
 
 Output:
@@ -47,16 +51,125 @@ EOF
 }
 
 # =========================
+# help function
+# =========================
+get_fastq_prefix(){
+  local -n _files_ref="$1"
+  local ext="${2:-.fastq.gz}"
+  local bad=0
+  local b core prefix lane chunk read
+
+  declare -gA FWD_BY_PREFIX=()
+  declare -gA REV_BY_PREFIX=()
+
+  for p in "${_files_ref[@]}"; do
+    b="$(basename "$p")"
+    [[ "$b" == *"$ext" ]] || { echo "ERROR: $b doesn't match the suffix $ext" >&2; bad=1; continue; }
+    core="${b%$ext}"
+
+    lane=""
+    chunk=""
+    read=""
+
+    # chunk: ends with .001 or _001
+    if [[ "$core" =~ ^(.+)[._]([0-9]{3})$ ]]; then
+      core="${BASH_REMATCH[1]}"
+      chunk="${BASH_REMATCH[2]}"
+    fi
+    # read: ends with .R1 / _R1 / .1 / _1 etc
+    if [[ "$core" =~ ^(.+)[._]R([12])$ ]]; then
+      core="${BASH_REMATCH[1]}"
+      read="${BASH_REMATCH[2]}"
+    elif [[ "$core" =~ ^(.+)[._]([12])$ ]]; then
+      core="${BASH_REMATCH[1]}"
+      read="${BASH_REMATCH[2]}"
+    else
+      echo "ERROR: $b doesn't conform to the FASTQ naming convention (missing read token)" >&2
+      bad=1
+      continue
+    fi
+    # lane: ends with .L001 / _L001
+    if [[ "$core" =~ ^(.+)[._](L[0-9]{3})$ ]]; then
+      core="${BASH_REMATCH[1]}"
+      lane="${BASH_REMATCH[2]}"
+    fi
+
+    prefix="$core"
+    [[ -n "$prefix" ]] || { echo "ERROR: $b doesn't conform to the FASTQ naming convention (empty prefix)" >&2; bad=1; continue; }
+    if [[ "$read" == "1" ]]; then
+      if [[ -n "${FWD_BY_PREFIX[$prefix]:-}" && "${FWD_BY_PREFIX[$prefix]}" != "$p" ]]; then
+        echo "ERROR: Multiple forward reads found for group '$prefix'" >&2
+        echo "  forward_1: ${FWD_BY_PREFIX[$prefix]}" >&2
+        echo "  forward_2: $p" >&2
+        return 2
+      fi
+      FWD_BY_PREFIX["$prefix"]="$p"
+    else
+      if [[ -n "${REV_BY_PREFIX[$prefix]:-}" && "${REV_BY_PREFIX[$prefix]}" != "$p" ]]; then
+        echo "ERROR: Multiple reverse reads found for group '$prefix'" >&2
+        echo "  reverse_1: ${REV_BY_PREFIX[$prefix]}" >&2
+        echo "  reverse_2: $p" >&2
+        return 2
+      fi
+      REV_BY_PREFIX["$prefix"]="$p"
+    fi
+  done
+
+  [[ "$bad" -eq 0 ]] || return 3
+
+  local k
+  for k in "${!FWD_BY_PREFIX[@]}"; do
+    [[ -n "${REV_BY_PREFIX[$k]:-}" ]] || { echo "ERROR: Missing reverse read for group '$k'" >&2; return 4; }
+  done
+  for k in "${!REV_BY_PREFIX[@]}"; do
+    [[ -n "${FWD_BY_PREFIX[$k]:-}" ]] || { echo "ERROR: Missing forward read for group '$k'" >&2; return 4; }
+  done
+}
+
+get_picard_jar_path() {
+  local picard_script current_dir link_target jar_path
+  declare -g PICARD_JAR=""
+
+  picard_script="$(command -v picard || true)"
+  if [[ -z "$picard_script" || ! -e "$picard_script" ]]; then
+    echo "ERROR: picard is not installed or not in PATH" >&2
+    return 1
+  fi
+
+  while [[ -L "$picard_script" ]]; do
+    current_dir="$(cd "$(dirname "$picard_script")" && pwd)"
+    link_target="$(readlink "$picard_script")"
+    if [[ "$link_target" != /* ]]; then
+      picard_script="$current_dir/$link_target"
+    else
+      picard_script="$link_target"
+    fi
+  done
+
+  current_dir="$(cd "$(dirname "$picard_script")" && pwd)"
+  jar_path="$current_dir/picard.jar"
+
+  if [[ -f "$jar_path" ]]; then
+    PICARD_JAR="$jar_path"
+    return 0
+  else
+    echo "ERROR: picard.jar not found at expected location: $jar_path" >&2
+    return 1
+  fi
+}
+
+# =========================
 # argument setting
 # =========================
 FASTQ_DIR=""
 OUT_DIR=""
 REF_GENOME=""
 
+TRIM_5P="45"
 MIN_LEN="10"
 MAX_LEN="1300"
-THREADS="8"
-JAVA_MEM="16g"
+THREADS=""
+JAVA_MEM=""
 PICARD_JAR=""
 
 while [[ $# -gt 0 ]]; do
@@ -71,6 +184,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     -g|--genome)
       REF_GENOME="$2"
+      shift 2
+      ;;
+    --trim-5p)
+      TRIM_5P="$2"
       shift 2
       ;;
     --min-len)
@@ -134,6 +251,11 @@ if [[ "${REF_GENOME}" != "hg38" && "${REF_GENOME}" != "mm10" ]]; then
   exit 1
 fi
 
+if ! [[ "${TRIM_5P}" =~ ^[0-9]+$ ]] || [[ "${TRIM_5P}" -lt 0 ]]; then
+  echo "[ERROR] --trim-5p must be a non-negative integer"
+  exit 1
+fi
+
 if ! [[ "${MIN_LEN}" =~ ^[0-9]+$ ]] || [[ "${MIN_LEN}" -lt 0 ]]; then
   echo "[ERROR] --min-len must be a non-negative integer"
   exit 1
@@ -146,9 +268,19 @@ if [[ "${MAX_LEN}" -lt "${MIN_LEN}" ]]; then
   echo "[ERROR] --max-len must be >= --min-len"
   exit 1
 fi
-if ! [[ "${THREADS}" =~ ^[0-9]+$ ]] || [[ "${THREADS}" -lt 1 ]]; then
-  echo "[ERROR] --threads must be a positive integer"
-  exit 1
+
+if [[ -z "$THREADS" ]] || ! [[ "${THREADS}" =~ ^[0-9]+$ ]] || [[ "${THREADS}" -lt 1 ]]; then
+  echo "Automatically detecting available CPU cores"
+  THREADS="$(get_cpu_cores)"
+fi
+if [[ -z "$JAVA_MEM" ]] || ! [[ "${JAVA_MEM}" =~ ^[0-9]+[mg]$ ]]; then
+  echo "Automatically detecting available memory for Java"
+  JAVA_MEM="$(get_memory)"
+fi
+
+if [[ -z "$PICARD_JAR" ]] || ! [[ -f "$PICARD_JAR" ]]; then
+  echo "Automatically searching for picard.jar"
+  get_picard_jar_path || { echo "[ERROR] get_picard_jar_path failed" >&2; exit 1; }
 fi
 
 # =========================
@@ -168,8 +300,6 @@ mkdir -p "${OUT_DIR}"
 # =========================
 # bowtie2 index prefix (via ref_prep.py)
 # =========================
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-
 INDEX_PREFIX="$(
   "$ROOT/bin/ref_prep.py" get_bowtie2_index --genome "$REF_GENOME" \
   | tail -n 1 \
@@ -210,24 +340,19 @@ align_one_comb() {
   local out_prefix="$4"
 
   local sam="${out_prefix}.sam"
-  local bam="${out_prefix}.bam"
-  local filtered="${out_prefix}.filtered.bam"
-  local clean="${out_prefix}.filtered.clean.bam"
-  local temp_sam="${out_prefix}.temp.sam"
-  local sorted_bam="${out_prefix}.sort.bam"
+  local clean_sorted="${out_prefix}.filtered.clean.sort.bam"
   local dup_bam="${out_prefix}.filtered.clean.dup.bam"
   local metrics="${out_prefix}_picard_metrics.txt"
-  local dup_sort="${out_prefix}.filtered.clean.dup.sort.bam"
   local final_bam="${out_prefix}.bam"
 
-  echo "[align] Processing comb: ${comb}"
+  echo "[align] Processing comb: ${comb}" >&2
 
   # 1) Bowtie2 -> SAM
   bowtie2 \
     -x "${INDEX_PREFIX}" \
     -I "${MIN_LEN}" \
     -X "${MAX_LEN}" \
-    -5 45 \
+    -5 "${TRIM_5P}" \
     -p "${THREADS}" \
     -q \
     --local \
@@ -241,66 +366,54 @@ align_one_comb() {
     -2 "${r2}" \
     -S "${sam}"
 
-  # 2) SAM -> BAM
-  samtools view -bS -o "${bam}" "${sam}"
+  # 2–5) SAM -> BAM | MAPQ>=10 | drop chrM/random/chrUn | sort
+  samtools view -@ "${THREADS}" -h -q 10 "${sam}" \
+    | awk 'BEGIN{OFS="\t"} /^@/ {print; next} ($3!="chrM" && $3 !~ /random/ && $3 !~ /^chrUn/) {print}' \
+    | samtools view -@ "${THREADS}" -b - \
+    | samtools sort -@ "${THREADS}" -o "${clean_sorted}" -
+
   rm -f "${sam}"
 
-  # 3) Filter MAPQ >= 10
-  samtools view -b -q 10 "${bam}" -o "${filtered}"
-  rm -f "${bam}"
-
-  # 4) Drop unwanted chromosomes (chrM, random, chrUn)
-  samtools view -h "${filtered}" > "${temp_sam}"
-  # delete alignments to unwanted references (keeps headers)
-  sed '/chrM/d;/random/d;/chrUn/d' "${temp_sam}" | samtools view -Sb - > "${clean}"
-  rm -f "${filtered}" "${temp_sam}"
-
-  # 5) Sort by coordinate
-  samtools sort "${clean}" -o "${sorted_bam}"
-  rm -f "${clean}"
-
-  # 6) Mark duplicates (remove duplicates)
+  # 6) Mark duplicates (REMOVE_DUPLICATES=true)
   java "-Xmx${JAVA_MEM}" -jar "${PICARD_JAR}" MarkDuplicates \
-    --INPUT "${sorted_bam}" \
+    --INPUT "${clean_sorted}" \
     --OUTPUT "${dup_bam}" \
     --METRICS_FILE "${metrics}" \
     --REMOVE_DUPLICATES true
-  rm -f "${sorted_bam}"
 
-  # 7) Final sort (kept consistent with your python: samtools sort without -n)
-  samtools sort "${dup_bam}" -o "${dup_sort}"
-  rm -f "${dup_bam}"
+  rm -f "${clean_sorted}"
 
-  # 8) Rename to final BAM + index
-  mv -f "${dup_sort}" "${final_bam}"
-  samtools index "${final_bam}"
+  # 7) Rename to final BAM + build index
+  if samtools index "${dup_bam}"; then
+    mv -f "${dup_bam}" "${final_bam}"
+  else
+    samtools sort -@ "${THREADS}" -o "${final_bam}" "${dup_bam}"
+    rm -f "${dup_bam}"
+    samtools index "${final_bam}"
+  fi
 
-  echo "[align] Final BAM: ${final_bam}"
+  echo "[align] Final BAM: ${final_bam}" >&2
 }
 
 # =========================
 # discover combinations + run
 # =========================
 shopt -s nullglob
-
-r1_files=( "${FASTQ_DIR}"/*.R1.fastq.gz )
-if [[ ${#r1_files[@]} -eq 0 ]]; then
-  echo "[ERROR] No *.R1.fastq.gz found in: ${FASTQ_DIR}"
+fastq_files=( "${FASTQ_DIR}"/*.fastq.gz )
+if [[ ${#fastq_files[@]} -eq 0 ]]; then
+  echo "[ERROR] No *.fastq.gz found in: ${FASTQ_DIR}" >&2
   exit 1
 fi
 
-missing=0
-for r1 in "${r1_files[@]}"; do
-  base="$(basename "${r1}")"
-  comb="${base%.R1.fastq.gz}"
-  r2="${FASTQ_DIR}/${comb}.R2.fastq.gz"
+declare -A FWD_BY_PREFIX
+declare -A REV_BY_PREFIX
+get_fastq_prefix fastq_files FWD_BY_PREFIX REV_BY_PREFIX ".fastq.gz" || exit $?
 
-  if [[ ! -f "${r2}" ]]; then
-    echo "[ERROR] Missing matching R2 for comb '${comb}': ${r2}"
-    missing=1
-    continue
-  fi
+prefixes=( "${!FWD_BY_PREFIX[@]}" )
 
+for comb in "${prefixes[@]}"; do
+  r1="${FWD_BY_PREFIX[$comb]}"
+  r2="${REV_BY_PREFIX[$comb]}"
   out_prefix="${OUT_DIR}/${comb}"
   align_one_comb "${r1}" "${r2}" "${comb}" "${out_prefix}"
 done
@@ -315,4 +428,7 @@ echo "[align] Genome          : ${REF_GENOME}"
 echo "[align] Index prefix    : ${INDEX_PREFIX}"
 echo "[align] Picard jar       : ${PICARD_JAR}"
 echo "[align] Output dir       : ${OUT_DIR}"
+echo "[align] Trim 5' end      : ${TRIM_5P}"
+echo "[align] Min fragment len: ${MIN_LEN}"
+echo "[align] Max fragment len: ${MAX_LEN}"
 echo "[align] Done"

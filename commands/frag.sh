@@ -16,7 +16,7 @@ Optional:
   -h, --help     Show this help message and exit
 
 Output:
-  OUT_DIR/*.sort.bed
+  OUT_DIR/*.bed
 
 Description:
   Convert BAM files into sorted BED files by:
@@ -100,8 +100,8 @@ for bam in "${BAM_DIR}"/*.bam; do
 
   SORT_BAM="${BED_DIR}/${prefix}.sort.bam"
   BEDPE="${BED_DIR}/${prefix}.bedpe"
-  BED="${BED_DIR}/${prefix}.bed"
-  SORT_BED="${BED_DIR}/${prefix}.sort.bed"
+  TMP_BED="${BED_DIR}/${prefix}.tmp.bed"
+  FINAL_BED="${BED_DIR}/${prefix}.bed"
 
   # 1. name sort BAM
   samtools sort -n "$bam" -o "$SORT_BAM"
@@ -110,13 +110,13 @@ for bam in "${BAM_DIR}"/*.bam; do
   bedtools bamtobed -bedpe -i "$SORT_BAM" > "$BEDPE"
 
   # 3. BEDPE -> BED (fragment)
-  awk 'BEGIN{OFS="\t"} {print $1,$2,$6}' "$BEDPE" > "$BED"
+  awk 'BEGIN{OFS="\t"} {print $1,$2,$6}' "$BEDPE" > "$TMP_BED"
 
   # 4. sort BED
-  sort -k1,1 -k2,2n "$BED" -o "$SORT_BED"
+  sort -k1,1 -k2,2n "$TMP_BED" -o "$FINAL_BED"
 
   # cleanup
-  rm -f "$SORT_BAM" "$BEDPE" "$BED"
+  rm -f "$SORT_BAM" "$BEDPE" "$TMP_BED"
 done
 
 echo "[frag] Input BAM dir : ${BAM_DIR}"
