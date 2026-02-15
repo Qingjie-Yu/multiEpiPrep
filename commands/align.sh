@@ -309,13 +309,13 @@ align_one_comb() {
     --REMOVE_DUPLICATES true
 
   rm -f "${clean_sorted}"
-
+  
   # 7) Rename to final BAM + build index
-  if samtools index "${dup_bam}"; then
-    mv -f "${dup_bam}" "${final_bam}"
-  else
-    samtools sort -@ "${THREADS}" -o "${final_bam}" "${dup_bam}"
-    rm -f "${dup_bam}"
+  mv -f "${dup_bam}" "${final_bam}"
+  if ! samtools index "${final_bam}"; then
+    tmp_sorted="${out_prefix}.tmp.sort.bam"
+    samtools sort -@ "${THREADS}" -o "${tmp_sorted}" "${final_bam}"
+    mv -f "${tmp_sorted}" "${final_bam}"
     samtools index "${final_bam}"
   fi
 
