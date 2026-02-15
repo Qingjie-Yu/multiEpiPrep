@@ -120,12 +120,14 @@ drop_empty_files() {
   _is_empty_fastq() {
     local f="$1"
     [[ -e "$f" ]] || return 0
-    if [[ "$f" == *.gz ]]; then
-      if ! gzip -cd "$f" 2>/dev/null | head -c 1 | grep -q .; then
-        return 0
-      else
-        return 1
-      fi
+      if [[ "$f" == *.gz ]]; then
+      gzip -t "$f" 2>/dev/null || return 1
+
+      (
+        set +e
+        set +o pipefail
+        gzip -cd "$f" 2>/dev/null | dd bs=1 count=1 2>/dev/null | grep -q .
+      ) && return 1 || return 0
     fi
     [[ ! -s "$f" ]] && return 0 || return 1
   }

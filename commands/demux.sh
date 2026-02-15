@@ -243,6 +243,7 @@ for prefix in "${prefixes[@]}"; do
     gzip -cd "$r2" "$rev_r2" | gzip > "$tmp_r2"
     mv "$tmp_r1" "$r1"
     mv "$tmp_r2" "$r2"
+    rm -f -- "$rev_r1" "$rev_r2"
   else
     new_r1="${OUT_DIR}/${rev_prefix}.R1.fastq.gz"
     new_r2="${OUT_DIR}/${rev_prefix}.R2.fastq.gz"

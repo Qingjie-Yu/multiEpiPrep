@@ -53,79 +53,6 @@ EOF
 # =========================
 # help function
 # =========================
-get_fastq_prefix(){
-  local -n _files_ref="$1"
-  local ext="${2:-.fastq.gz}"
-  local bad=0
-  local b core prefix lane chunk read
-
-  declare -gA FWD_BY_PREFIX=()
-  declare -gA REV_BY_PREFIX=()
-
-  for p in "${_files_ref[@]}"; do
-    b="$(basename "$p")"
-    [[ "$b" == *"$ext" ]] || { echo "ERROR: $b doesn't match the suffix $ext" >&2; bad=1; continue; }
-    core="${b%$ext}"
-
-    lane=""
-    chunk=""
-    read=""
-
-    # chunk: ends with .001 or _001
-    if [[ "$core" =~ ^(.+)[._]([0-9]{3})$ ]]; then
-      core="${BASH_REMATCH[1]}"
-      chunk="${BASH_REMATCH[2]}"
-    fi
-    # read: ends with .R1 / _R1 / .1 / _1 etc
-    if [[ "$core" =~ ^(.+)[._]R([12])$ ]]; then
-      core="${BASH_REMATCH[1]}"
-      read="${BASH_REMATCH[2]}"
-    elif [[ "$core" =~ ^(.+)[._]([12])$ ]]; then
-      core="${BASH_REMATCH[1]}"
-      read="${BASH_REMATCH[2]}"
-    else
-      echo "ERROR: $b doesn't conform to the FASTQ naming convention (missing read token)" >&2
-      bad=1
-      continue
-    fi
-    # lane: ends with .L001 / _L001
-    if [[ "$core" =~ ^(.+)[._](L[0-9]{3})$ ]]; then
-      core="${BASH_REMATCH[1]}"
-      lane="${BASH_REMATCH[2]}"
-    fi
-
-    prefix="$core"
-    [[ -n "$prefix" ]] || { echo "ERROR: $b doesn't conform to the FASTQ naming convention (empty prefix)" >&2; bad=1; continue; }
-    if [[ "$read" == "1" ]]; then
-      if [[ -n "${FWD_BY_PREFIX[$prefix]:-}" && "${FWD_BY_PREFIX[$prefix]}" != "$p" ]]; then
-        echo "ERROR: Multiple forward reads found for group '$prefix'" >&2
-        echo "  forward_1: ${FWD_BY_PREFIX[$prefix]}" >&2
-        echo "  forward_2: $p" >&2
-        return 2
-      fi
-      FWD_BY_PREFIX["$prefix"]="$p"
-    else
-      if [[ -n "${REV_BY_PREFIX[$prefix]:-}" && "${REV_BY_PREFIX[$prefix]}" != "$p" ]]; then
-        echo "ERROR: Multiple reverse reads found for group '$prefix'" >&2
-        echo "  reverse_1: ${REV_BY_PREFIX[$prefix]}" >&2
-        echo "  reverse_2: $p" >&2
-        return 2
-      fi
-      REV_BY_PREFIX["$prefix"]="$p"
-    fi
-  done
-
-  [[ "$bad" -eq 0 ]] || return 3
-
-  local k
-  for k in "${!FWD_BY_PREFIX[@]}"; do
-    [[ -n "${REV_BY_PREFIX[$k]:-}" ]] || { echo "ERROR: Missing reverse read for group '$k'" >&2; return 4; }
-  done
-  for k in "${!REV_BY_PREFIX[@]}"; do
-    [[ -n "${FWD_BY_PREFIX[$k]:-}" ]] || { echo "ERROR: Missing forward read for group '$k'" >&2; return 4; }
-  done
-}
-
 get_picard_jar_path() {
   local picard_script current_dir link_target jar_path
   declare -g PICARD_JAR=""
@@ -278,10 +205,19 @@ if [[ -z "$JAVA_MEM" ]] || ! [[ "${JAVA_MEM}" =~ ^[0-9]+[mg]$ ]]; then
   JAVA_MEM="$(get_memory)"
 fi
 
-if [[ -z "$PICARD_JAR" ]] || ! [[ -f "$PICARD_JAR" ]]; then
-  echo "Automatically searching for picard.jar"
-  get_picard_jar_path || { echo "[ERROR] get_picard_jar_path failed" >&2; exit 1; }
+if [[ -z "${PICARD_JAR:-}" ]] || [[ ! -f "${PICARD_JAR}" ]]; then
+  echo "Automatically searching for picard.jar" >&2
+  PICARD_JAR="$(
+    "$ROOT/bin/ref_prep.py" get_picard_jar \
+    | tail -n 1 \
+    | sed -E 's/^"(.*)"$/\1/'
+  )"
 fi
+
+[[ -n "${PICARD_JAR:-}" && -f "${PICARD_JAR}" ]] || {
+  echo "[ERROR] picard jar not found: ${PICARD_JAR:-<empty>}" >&2
+  exit 1
+}
 
 # =========================
 # dependency check
@@ -311,22 +247,6 @@ INDEX_PREFIX="$(
 if [[ ! -f "${INDEX_PREFIX}.1.bt2" && ! -f "${INDEX_PREFIX}.1.bt2l" ]]; then
   echo "[ERROR] bowtie2 index not found for prefix: ${INDEX_PREFIX}"
   echo "        Expected ${INDEX_PREFIX}.1.bt2 (or .1.bt2l)"
-  exit 1
-fi
-
-# =========================
-# picard jar (optional auto-detect)
-# =========================
-if [[ -z "${PICARD_JAR}" ]]; then
-  PICARD_JAR="$(
-    "$ROOT/bin/ref_prep.py" get_picard_jar \
-    | tail -n 1 \
-    | sed -E 's/^"(.*)"$/\1/'
-  )"
-fi
-
-if [[ -z "${PICARD_JAR}" || ! -f "${PICARD_JAR}" ]]; then
-  echo "[ERROR] picard jar not found: ${PICARD_JAR}"
   exit 1
 fi
 
@@ -417,11 +337,6 @@ for comb in "${prefixes[@]}"; do
   out_prefix="${OUT_DIR}/${comb}"
   align_one_comb "${r1}" "${r2}" "${comb}" "${out_prefix}"
 done
-
-if [[ "${missing}" -ne 0 ]]; then
-  echo "[ERROR] Some combinations missing R2; see errors above."
-  exit 1
-fi
 
 echo "[align] Input FASTQ dir : ${FASTQ_DIR}"
 echo "[align] Genome          : ${REF_GENOME}"
