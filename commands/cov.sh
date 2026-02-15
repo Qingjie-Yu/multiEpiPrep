@@ -10,7 +10,7 @@ Usage: multiEpiPrep cov -i BED_DIR -o OUT_DIR -g REF_GENOME
 
 Required:
   -i, --input    Directory containing BED files
-  -o, --output   Base output directory
+  -o, --output   Output directory
   -g, --genome   Reference genome name (hg38 or mm10)
 
 Optional:

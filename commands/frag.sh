@@ -10,7 +10,7 @@ Usage: multiEpiPrep frag -i BAM_DIR -o OUT_DIR
 
 Required:
   -i, --input    Directory containing BAM files
-  -o, --output   Base output directory
+  -o, --output   Output directory
 
 Optional:
   -h, --help     Show this help message and exit
