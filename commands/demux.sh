@@ -18,7 +18,7 @@ Required:
   -o, --output   Output directory (will be created if missing)
 
 Optional:
-  -e, --error    Max barcode mismatches for cutadapt (default: 2)
+  -e, --error    Max barcode mismatches for cutadapt (default: 0)
   -j, --threads  Threads for cutadapt (default: auto-detect)
   -h, --help     Show this help message and exit
 
@@ -52,7 +52,7 @@ R2_FASTQ=""
 FWD_FASTA=""
 REV_FASTA=""
 OUT_DIR=""
-ERROR_RATE="2"
+ERROR_RATE="0"
 THREADS=""
 
 while [[ $# -gt 0 ]]; do

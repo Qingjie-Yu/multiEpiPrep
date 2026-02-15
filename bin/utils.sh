@@ -9,7 +9,7 @@
 #   2) scontrol show job
 #   3) fallback = 1
 # ---------------------------------------
-get_cpu_core() {
+get_cpu_cores() {
   local cores=""
 
   # 1) SLURM: explicit allocation
