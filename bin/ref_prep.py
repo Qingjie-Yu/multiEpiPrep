@@ -9,7 +9,6 @@ import sys
 import json
 import hashlib
 import re
-import argparse
 
 class ref_prep:
     def __init__(self, fixed_directory=None):
@@ -314,6 +313,7 @@ class ref_prep:
             raise RuntimeError(f"Failed to download chromosome size for '{index_name}': {e}")
 
 if __name__ == "__main__":
+    import argparse
     parser = argparse.ArgumentParser(
         prog="ref_prep",
         description="Resolve and prepare reference assets for multiEpiPrep"

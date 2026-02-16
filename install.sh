@@ -4,7 +4,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="$ROOT/bin"
 TARGET="$BIN_DIR/multiEpiPrep"
-REF_PREP="$BIN_DIR/ref_prep.py"
 BASHRC="$HOME/.bashrc"
 
 if [[ ! -f "$TARGET" ]]; then
@@ -13,7 +12,8 @@ if [[ ! -f "$TARGET" ]]; then
 fi
 
 chmod +x "$TARGET" || true
-chmod +x "$REF_PREP" || true
+chmod +x "$BIN_DIR/ref_prep.py" || true
+chmod +x "$BIN_DIR/create_barcode_fasta.py" || true
 
 EXPORT_LINE="export PATH=\"$BIN_DIR:\$PATH\""
 

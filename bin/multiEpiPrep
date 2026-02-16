@@ -16,6 +16,7 @@ Usage:
   multiEpiPrep <command> [options]
 
 Commands:
+  barcode Create forward and reverse barcode FASTA files from spreadsheet input
   demux   Demultiplex pooled FASTQ files into barcode-pair-specific FASTQ files
   align   Align FASTQ reads to the reference genome and generate BAM files
   qc      Perform quality control on BAM files
@@ -24,7 +25,7 @@ Commands:
   track   Generate genome browser tracks by converting bedGraph to bigWig
 EOF
     ;;
-  demux|align|qc|frag|cov|track)
+  barcode|demux|align|qc|frag|cov|track)
     bash "$ROOT/commands/${cmd}.sh" "$@"
     ;;
   *)
