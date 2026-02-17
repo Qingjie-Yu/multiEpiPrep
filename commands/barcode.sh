@@ -91,8 +91,8 @@ command -v python3 >/dev/null 2>&1 || { echo "[ERROR] python3 not found in PATH"
 # output directory
 # =========================
 mkdir -p "$OUT_DIR"
-FWD_FASTA="${$OUT_DIR}/barcode_fwd.fasta"
-REV_FASTA="${$OUT_DIR}/barcode_rev.fasta"
+FWD_FASTA="${OUT_DIR}/barcode_fwd.fasta"
+REV_FASTA="${OUT_DIR}/barcode_rev.fasta"
 
 # =========================
 # main function
