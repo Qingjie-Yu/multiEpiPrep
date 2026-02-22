@@ -137,7 +137,7 @@ drop_empty_files bams 0
 has_dash=0
 for bam in "${bams[@]}"; do
   base="$(basename "$bam")"
-  [[ "$base" == *-* ]] && ((has_dash++))
+  [[ "$base" == *-* ]] && ((++has_dash))
 done
 
 mode="mixed"
@@ -156,6 +156,16 @@ if (( ${#EXCLUDE[@]} > 0 )); then
       t2="${b#*-}"
       in_array "$t1" "${EXCLUDE[@]}" && continue
       in_array "$t2" "${EXCLUDE[@]}" && continue
+      get_read_count "$bam"
+    done
+  elif [[ "$mode" == "single" ]]; then
+    for bam in "${bams[@]}"; do
+      b="$(basename "$bam" .bam)"
+      skip=0
+      for item in "${EXCLUDE[@]}"; do
+        [[ "$b" == "$item" ]] && { skip=1; break; }
+      done
+      (( skip )) && continue
       get_read_count "$bam"
     done
   else
@@ -199,9 +209,12 @@ THRESHOLD="$(
 
 awk -v T="${THRESHOLD}" 'NR==1 || $2 >= T' "${ALL_TSV}" > "${FILTERED_TSV}"
 
+PAIR_COUNT=$(awk 'NR>1 {c++} END {print c+0}' "${FILTERED_TSV}")
+
 echo "[QC] Input BAM dir : ${BAM_DIR}"
 echo "[QC] Output dir    : ${OUT_DIR}"
 echo "[QC] Percentile    : ${PERCENTILE}"
-echo "[QC] Threshold     : ${THRESHOLD}"
 echo "[QC] Exclude       : ${EXCLUDE_STR:-<empty>}"
+echo "[QC] Threshold     : ${THRESHOLD}"
+echo "[QC] Retained pairs : ${PAIR_COUNT}"
 echo "[QC] Done"

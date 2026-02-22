@@ -20,7 +20,7 @@ Required:
 Optional:
   --trim-5p      Number of nucleotides to trim from 5' end of each read (default: 45)
   --min-len        Min fragment length for bowtie2 -I (default: 10)
-  --max-len        Max fragment length for bowtie2 -X (default: 1300)
+  --max-len        Max fragment length for bowtie2 -X (default: 800)
   -p, --threads    Threads for bowtie2 (default: auto-detect)
   --java-mem       Java memory for Picard (default: auto-detect)
   --picard-jar     Path to picard.jar (default: auto-detect)
@@ -94,7 +94,7 @@ REF_GENOME=""
 
 TRIM_5P="45"
 MIN_LEN="10"
-MAX_LEN="1300"
+MAX_LEN="800"
 THREADS=""
 JAVA_MEM=""
 PICARD_JAR=""
