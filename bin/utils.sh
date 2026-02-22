@@ -117,36 +117,49 @@ drop_empty_files() {
   local -a empty=()
 
   # helper: check if FASTQ / FASTQ.GZ is empty after decompression
-  _is_empty_fastq() {
+  _is_empty() {
     local f="$1"
     [[ -e "$f" ]] || return 0
-      if [[ "$f" == *.gz ]]; then
-      gzip -t "$f" 2>/dev/null || return 1
+    if [[ "$f" == *.gz ]]; then
+      gzip -t "$f" 2>/dev/null || return 0
 
       (
         set +e
         set +o pipefail
         gzip -cd "$f" 2>/dev/null | dd bs=1 count=1 2>/dev/null | grep -q .
       ) && return 1 || return 0
+    
+    elif [[ "$f" == *.bam ]]; then
+      [[ -s "$f" ]] || return 0
+      if [[ ! -f "${f}.bai" && ! -f "${f%.bam}.bai" ]]; then
+        echo "[ERROR] Missing BAM index for: $f (run: samtools index \"$f\")" >&2
+        exit 1
+      fi
+      samtools quickcheck "$f" >/dev/null 2>&1 || return 0
+      local n
+      n="$(samtools idxstats "$f" 2>/dev/null | awk '{s+=$3} END{print s+0}')"
+      [[ "$n" -gt 0 ]] && return 1 || return 0
+    
+    else
+      [[ ! -s "$f" ]] && return 0 || return 1
+
     fi
-    [[ ! -s "$f" ]] && return 0 || return 1
   }
 
   local -a kept=()
   for p in "${_paths_ref[@]}"; do
-    if _is_empty_fastq "$p"; then
+    if _is_empty "$p"; then
       empty+=("$p")
     else
       kept+=("$p")
     fi
   done
 
-
   _paths_ref=("${kept[@]}")
   if [[ "$remove_empty" -eq 1 && "${#empty[@]}" -gt 0 ]]; then
-    echo "Warning: The following files are empty and have been excluded:"
+    echo "Warning: The following files are empty and have been removed:" >&2
     for p in "${empty[@]}"; do
-      echo "  $p"
+      echo "  $p" >&2
       rm -f "$p"
     done
   fi

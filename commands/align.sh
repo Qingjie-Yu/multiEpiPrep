@@ -242,22 +242,6 @@ if [[ ! -f "${INDEX_PREFIX}.1.bt2" && ! -f "${INDEX_PREFIX}.1.bt2l" ]]; then
 fi
 
 # =========================
-# picard jar (optional auto-detect)
-# =========================
-if [[ -z "${PICARD_JAR}" ]]; then
-  PICARD_JAR="$(
-    "$ROOT/bin/ref_prep.py" get_picard_jar \
-    | tail -n 1 \s
-    | sed -E 's/^"(.*)"$/\1/'
-  )"
-fi
-
-if [[ -z "${PICARD_JAR}" || ! -f "${PICARD_JAR}" ]]; then
-  echo "[ERROR] picard jar not found: ${PICARD_JAR}"
-  exit 1
-fi
-
-# =========================
 # helpers
 # =========================
 align_one_comb() {
