@@ -18,7 +18,10 @@ Required:
   -g, --genome     Reference genome name (hg38 or mm10)
 
 Optional:
-  --trim-5p      Number of nucleotides to trim from 5' end of each read (default: 45)
+  --umi-len        Length of 5' UMI in each read (default: 0).
+                   0 -> coordinate-based dedup (Picard MarkDuplicates)
+                   >0 -> UMI-aware dedup (umi_tools extract + umi_tools dedup)
+  --trim-5p        Number of nucleotides to trim from 5' end of each read (default: 45)
   --min-len        Min fragment length for bowtie2 -I (default: 10)
   --max-len        Max fragment length for bowtie2 -X (default: 800)
   -p, --threads    Threads for bowtie2 (default: auto-detect)
@@ -29,24 +32,28 @@ Optional:
 Output:
   OUT_DIR/<comb>.bam
   OUT_DIR/<comb>.bam.bai
-  OUT_DIR/<comb>_picard_metrics.txt
+  OUT_DIR/<comb>.umi_extract.log            (if --umi-len > 0)
+  OUT_DIR/<comb>.umi_dedup.log              (if --umi-len > 0)
+  OUT_DIR/<comb>.picard_metrics.txt         (if --umi-len = 0)
 
 Description:
-  Align merged demultiplexed paired-end FASTQ files (per barcode combination) to a reference
-  using bowtie2, then post-process:
-    1) bowtie2 -> SAM
-    2) SAM -> BAM
-    3) Filter by MAPQ >= 10
-    4) Remove chrM / random / chrUn
-    5) Sort (coordinate)
-    6) Picard MarkDuplicates (REMOVE_DUPLICATES=true)
-    7) Sort (final) and index BAM
-
-  Combination discovery:
-    - scans FASTQ_DIR for *.R1.fastq.gz and requires matching *.R2.fastq.gz
+  Align paired-end FASTQ files to a reference using bowtie2, then post-process:
+    1) (optional) umi_tools extract (dual-end UMI) if --umi-len > 0
+    2) bowtie2 alignment -> SAM
+    3) SAM -> BAM
+    4) Filter by MAPQ >= 10
+    5) Remove chrM / random / chrUn
+    6) Sort (coordinate)
+    7) Dedup:
+         - umi_tools dedup (--paired) if --umi-len > 0, then sort again
+         - Picard MarkDuplicates (REMOVE_DUPLICATES=true) if --umi-len = 0
+    8) Index BAM
 
 Example:
-  multiEpiPrep align -i ./merged_fastq -o ./bam_out -g hg38 -p 16 --java-mem 24g
+# Without UMI
+  multiEpiPrep align -i ./merged_fastq -o ./bam_out -g hg38 -p 16 --trim-5p 45 
+# With UMI
+  multiEpiPrep align -i ./merged_fastq -o ./bam_out -g hg38 -p 16 --umi-len 8 --trim-5p 34
 EOF
 }
 
@@ -92,6 +99,7 @@ FASTQ_DIR=""
 OUT_DIR=""
 REF_GENOME=""
 
+UMI_LEN="0"
 TRIM_5P="45"
 MIN_LEN="10"
 MAX_LEN="800"
@@ -111,6 +119,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     -g|--genome)
       REF_GENOME="$2"
+      shift 2
+      ;;
+    --umi-len)
+      UMI_LEN="$2"
       shift 2
       ;;
     --trim-5p)
@@ -178,6 +190,11 @@ if [[ "${REF_GENOME}" != "hg38" && "${REF_GENOME}" != "mm10" ]]; then
   exit 1
 fi
 
+if ! [[ "${UMI_LEN}" =~ ^[0-9]+$ ]] || [[ "${UMI_LEN}" -lt 0 ]]; then
+  echo "[ERROR] --umi-len must be a non-negative integer"
+  exit 1
+fi
+
 if ! [[ "${TRIM_5P}" =~ ^[0-9]+$ ]] || [[ "${TRIM_5P}" -lt 0 ]]; then
   echo "[ERROR] --trim-5p must be a non-negative integer"
   exit 1
@@ -218,6 +235,9 @@ command -v samtools >/dev/null 2>&1 || { echo "[ERROR] samtools not found in PAT
 command -v java >/dev/null 2>&1 || { echo "[ERROR] java not found in PATH"; exit 1; }
 command -v sed >/dev/null 2>&1 || { echo "[ERROR] sed not found in PATH"; exit 1; }
 command -v gzip >/dev/null 2>&1 || { echo "[ERROR] gzip not found in PATH"; exit 1; }
+if [[ "${UMI_LEN}" -gt 0 ]]; then
+  command -v umi_tools >/dev/null 2>&1 || { echo "[ERROR] umi_tools not found in PATH (required when --umi-len > 0)"; exit 1; }
+fi
 
 # =========================
 # output dir
@@ -252,11 +272,31 @@ align_one_comb() {
 
   local sam="${out_prefix}.sam"
   local clean_sorted="${out_prefix}.filtered.clean.sort.bam"
-  local dup_bam="${out_prefix}.filtered.clean.dup.bam"
-  local metrics="${out_prefix}_picard_metrics.txt"
+  local dedup_bam="${out_prefix}.filtered.clean.dup.bam"
   local final_bam="${out_prefix}.bam"
 
+  local umi_extract_log="${out_prefix}.umi_extract.log"
+  local umi_dedup_log="${out_prefix}.umi_dedup.log"
+  local picard_metrics="${out_prefix}.picard_metrics.txt"
+
   echo "[align] Processing comb: ${comb}" >&2
+
+  # 0) UMI extract (optional)
+  if [[ "${UMI_LEN}" -gt 0 ]]; then
+    local r1_ex="${out_prefix}.R1.extracted.fastq.gz"
+    local r2_ex="${out_prefix}.R2.extracted.fastq.gz"
+    echo "[align] UMI-aware mode: extracting dual-end UMI (len=${UMI_LEN})" >&2
+
+    umi_tools extract \
+      --bc-pattern="^(?P<umi_1>.{${UMI_LEN}})" \
+      --bc-pattern2="^(?P<umi_2>.{${UMI_LEN}})" \
+      --stdin "${r1}" --stdout "${r1_ex}" \
+      --read2-in "${r2}" --read2-out "${r2_ex}" \
+      --log "${umi_extract_log}"
+
+    r1="${r1_ex}"
+    r2="${r2_ex}"
+  fi
 
   # 1) Bowtie2 -> SAM
   bowtie2 \
@@ -285,17 +325,35 @@ align_one_comb() {
 
   rm -f "${sam}"
 
-  # 6) Mark duplicates (REMOVE_DUPLICATES=true)
-  java "-Xmx${JAVA_MEM}" -jar "${PICARD_JAR}" MarkDuplicates \
-    --INPUT "${clean_sorted}" \
-    --OUTPUT "${dup_bam}" \
-    --METRICS_FILE "${metrics}" \
-    --REMOVE_DUPLICATES true
+  # 6) Dedup
+  if [[ "${UMI_LEN}" -gt 0 ]]; then
+    local dedup_raw="${out_prefix}.filtered.clean.dup.unsorted.bam"
 
+    umi_tools dedup \
+      --paired \
+      -I "${clean_sorted}" \
+      -S "${dedup_raw}" \
+      --log "${umi_dedup_log}"
+
+    samtools sort -@ "${THREADS}" -o "${dedup_bam}" "${dedup_raw}"
+    rm -f "${dedup_raw}"
+  else
+    # Picard output may not be guaranteed sorted; we sort once to make indexing deterministic
+    local picard_raw="${out_prefix}.filtered.clean.dup.picard_raw.bam"
+
+    java "-Xmx${JAVA_MEM}" -jar "${PICARD_JAR}" MarkDuplicates \
+      --INPUT "${clean_sorted}" \
+      --OUTPUT "${picard_raw}" \
+      --METRICS_FILE "${picard_metrics}" \
+      --REMOVE_DUPLICATES true
+
+    samtools sort -@ "${THREADS}" -o "${dedup_bam}" "${picard_raw}"
+    rm -f "${picard_raw}"
+  fi
   rm -f "${clean_sorted}"
   
   # 7) Rename to final BAM + build index
-  mv -f "${dup_bam}" "${final_bam}"
+  mv -f "${dedup_bam}" "${final_bam}"
   if ! samtools index "${final_bam}"; then
     tmp_sorted="${out_prefix}.tmp.sort.bam"
     samtools sort -@ "${THREADS}" -o "${tmp_sorted}" "${final_bam}"
@@ -332,9 +390,10 @@ done
 echo "[align] Input FASTQ dir : ${FASTQ_DIR}"
 echo "[align] Genome          : ${REF_GENOME}"
 echo "[align] Index prefix    : ${INDEX_PREFIX}"
-echo "[align] Picard jar       : ${PICARD_JAR}"
 echo "[align] Output dir       : ${OUT_DIR}"
+echo "[align] UMI length      : ${UMI_LEN}"
 echo "[align] Trim 5' end      : ${TRIM_5P}"
 echo "[align] Min fragment len: ${MIN_LEN}"
 echo "[align] Max fragment len: ${MAX_LEN}"
+echo "[align] Threads         : ${THREADS}"
 echo "[align] Done"

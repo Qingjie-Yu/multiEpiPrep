@@ -1,14 +1,7 @@
 #!/usr/bin/env python
 
-import os
+import os, sys, re, json, hashlib, shutil, gzip, subprocess
 import urllib.request
-import gzip
-import shutil
-import subprocess
-import sys
-import json
-import hashlib
-import re
 
 class ref_prep:
     def __init__(self, fixed_directory=None):
