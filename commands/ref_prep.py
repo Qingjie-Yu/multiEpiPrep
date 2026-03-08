@@ -1,7 +1,12 @@
-#!/usr/bin/env python
-
-import os, sys, re, json, hashlib, shutil, gzip, subprocess
+import os
 import urllib.request
+import gzip
+import shutil
+import subprocess
+import sys
+import json
+import hashlib
+import re
 
 class ref_prep:
     def __init__(self, fixed_directory=None):
@@ -304,41 +309,3 @@ class ref_prep:
             if os.path.exists(save_dir):
                 shutil.rmtree(save_dir)
             raise RuntimeError(f"Failed to download chromosome size for '{index_name}': {e}")
-
-if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser(
-        prog="ref_prep",
-        description="Resolve and prepare reference assets for multiEpiPrep"
-    )
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    # get_bowtie2_index
-    p_bt2 = subparsers.add_parser(
-        "get_bowtie2_index",
-        help="Resolve or download Bowtie2 index and print prefix"
-    )
-    p_bt2.add_argument("--genome", required=True)
-
-    # get_chromsizes
-    p_cs = subparsers.add_parser(
-        "get_chromsizes",
-        help="Resolve or download chromsizes file and print path"
-    )
-    p_cs.add_argument("--genome", required=True)
-
-    args = parser.parse_args()
-
-    rp = ref_prep()
-    try:
-        if args.command == "get_bowtie2_index":
-            path = rp.get_bowtie2_index(args.genome)
-            print(path)
-
-        elif args.command == "get_chromsizes":
-            path = rp.get_chromsize(args.genome)
-            print(path)
-
-    except Exception as e:
-        sys.stderr.write(f"[ref_prep] ERROR: {e}\n")
-        sys.exit(1)

@@ -1,0 +1,66 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+import argparse
+import sys
+import importlib
+
+
+def main_help():
+    return """multiEpiPrep: A multi-command CLI for sequencing data preprocessing.
+
+Usage:
+  multiEpiPrep <command> [options]
+
+Commands:
+  barcode  Create forward and reverse barcode FASTA files from spreadsheet input
+  demux    Demultiplex pooled FASTQ files into barcode-pair-specific FASTQ files
+  adapt    Identify adapter structure and annotate read names with CB/UMI information
+  align    Align FASTQ reads to the reference genome and generate BAM files
+  qc       Perform quality control on BAM files
+  frag     Convert aligned BAM files to fragment-level BED files
+  cov      Compute genome-wide coverage and convert BED to bedGraph
+  track    Generate genome browser tracks by converting bedGraph to bigWig
+"""
+
+
+COMMANDS = {
+    "barcode": "commands.barcode",
+    "demux": "commands.demux",
+    "adapt": "commands.adapt",
+    "align": "commands.align",
+    "qc": "commands.qc",
+    "frag": "commands.frag",
+    "cov": "commands.cov",
+    "track": "commands.track",
+}
+
+def main() -> int:
+    if len(sys.argv) == 1 or sys.argv[1] in {"-h", "--help"}:
+        print(main_help())
+        return 0
+
+    command = sys.argv[1]
+    if command not in COMMANDS:
+        print(f"Unknown command: {command}\n")
+        print(main_help())
+        return 1
+    
+    # command-level help
+    if len(sys.argv) == 2 or sys.argv[2] in {"-h", "--help"}:
+        module = importlib.import_module(COMMANDS[command])
+        print(module.HELP) 
+        return 0
+    
+    module = importlib.import_module(COMMANDS[command])
+    parser = argparse.ArgumentParser(prog=f"multiEpiPrep {command}")
+    parser.add_argument("command")
+    module.register_parser(parser)
+
+    args = parser.parse_args()
+    if not hasattr(args, "func"):
+        print(module.HELP) 
+        return 0
+    return args.func(args)
+
+if __name__ == "__main__":
+    raise SystemExit(main())

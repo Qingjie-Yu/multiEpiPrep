@@ -12,8 +12,6 @@ if [[ ! -f "$TARGET" ]]; then
 fi
 
 chmod +x "$TARGET" || true
-chmod +x "$BIN_DIR/ref_prep.py" || true
-chmod +x "$BIN_DIR/create_barcode_fasta.py" || true
 
 EXPORT_LINE="export PATH=\"$BIN_DIR:\$PATH\""
 
