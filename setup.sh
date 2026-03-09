@@ -2,18 +2,17 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN_DIR="$ROOT/bin"
-TARGET="$BIN_DIR/multiEpiPrep"
+TARGET="$ROOT/multiEpiPrep"
 BASHRC="$HOME/.bashrc"
 
 if [[ ! -f "$TARGET" ]]; then
-  echo "Error: $TARGET not found"
+  echo "Error: executable not found: $TARGET"
   exit 1
 fi
 
 chmod +x "$TARGET" || true
 
-EXPORT_LINE="export PATH=\"$BIN_DIR:\$PATH\""
+EXPORT_LINE="export PATH=\"$ROOT:\$PATH\""
 
 touch "$BASHRC"
 
@@ -32,3 +31,6 @@ echo ""
 echo "Installation complete."
 echo "Run the following to activate:"
 echo "  source ~/.bashrc"
+echo ""
+echo "Then test with:"
+echo "  multiEpiPrep --help"

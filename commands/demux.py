@@ -7,7 +7,7 @@ from typing import Optional, Dict, List
 from .utils import get_files_path, get_cpu_core, drop_empty_files, get_fastq_prefix
 
 def merge_symmetric_fastq(demux_files: List[str]) -> List[str]:
-  unique_combs_dict = get_fastq_prefix(demux_files, ext=".fastq.gz")
+  unique_combs_dict = get_fastq_prefix(demux_files)
   unique_combs = set(unique_combs_dict.keys())
 
   print(f"\nGenerated {len(unique_combs)} barcode pairs")
