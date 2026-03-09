@@ -65,7 +65,7 @@ def qc_by_percentile(
     # Filter read counts
     counts_sorted = sorted([c for _, _, c in rows])
     threshold = counts_sorted[int((len(counts_sorted)-1)*percentile)]
-    filtered_rows = [(bam, prefix, c) for bam, prefix, c in rows if c >= threshold]
+    filtered_rows = [(bam, prefix, c) for bam, prefix, c in rows if c > threshold]
     write_readcount_tsv(filtered_tsv, filtered_rows)
 
     # Get passed .bam files
