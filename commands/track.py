@@ -11,7 +11,6 @@ def bed_to_bigwig(bed, prefix, bw_dir, chrom_sizes, normalized = True):
   sort_bg = os.path.join(bw_dir, f"{prefix}.sorted.bedGraph")
   bw = os.path.join(bw_dir, f"{prefix}.bw")
 
-
   with open(bed, "r") as f:
     total_reads = sum(1 for line in f if line.strip())
   if total_reads == 0:
@@ -26,14 +25,14 @@ def bed_to_bigwig(bed, prefix, bw_dir, chrom_sizes, normalized = True):
   subprocess.run(
     [
       "bash", "-c",
-      f"bedtools genomecov -bg {scale_opt} -i {bed} -g {chrom_sizes} > {bg}"
+      f"bedtools genomecov -bg {scale_opt} -i {shlex.quote(bed)} -g {shlex.quote(chrom_sizes)} > {shlex.quote(bg)}"
     ],
      check=True
   )
   subprocess.run(
     [
       "bash", "-c",
-      f"LC_ALL=C sort -k1,1 -k2,2n {bg} > {sort_bg}"
+      f"LC_ALL=C sort -k1,1 -k2,2n {shlex.quote(bg)} > {shlex.quote(sort_bg)}"
     ],
      check=True
   )
@@ -41,6 +40,10 @@ def bed_to_bigwig(bed, prefix, bw_dir, chrom_sizes, normalized = True):
     ["bedGraphToBigWig", sort_bg, chrom_sizes, bw],
     check=True
   )
+
+  for p in [bg, sort_bg]:
+    if os.path.exists(p):
+      os.remove(p)
   return bw
 
 def convert_bed_to_bigwig(
@@ -64,7 +67,7 @@ def convert_bed_to_bigwig(
     async_results = []
     for bed in bed_list:
       prefix = os.path.basename(bed).removesuffix('.bed')
-      ar = pool.apply_async(bed_to_bigwig, kwargs={"bed": bed, "prefix": prefix, "bw_dir": out_dir, "chrom_sizes": chrom_sizes, "normalized": normalized})
+      ar = pool.apply_async(bed_to_bigwig, args=(bed, prefix, out_dir, chrom_sizes, normalized))
       async_results.append((prefix, ar))
     
     for prefix, ar in async_results:
@@ -72,7 +75,9 @@ def convert_bed_to_bigwig(
         bigwig_list.append(ar.get())
       except Exception as e:
         print(f"Failed: {prefix} -> {e}")
-
+        pool.terminate()
+        return None
+      
   return bigwig_list
 
 HELP = """

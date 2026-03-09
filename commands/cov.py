@@ -9,7 +9,7 @@ from .utils import get_files_path, get_cpu_core
 def bed_to_bedgraph(bed, prefix, bg_dir, chrom_sizes):
   bg = os.path.join(bg_dir, f"{prefix}.bedGraph")
   subprocess.run(
-    ["bash", "-c", f"bedtools genomecov -bg -i {shlex.quote(bed)} -g {chrom_sizes} > {shlex.quote(bg)}"],
+    ["bash", "-c", f"bedtools genomecov -bg -i {shlex.quote(bed)} -g {shlex.quote(chrom_sizes)} > {shlex.quote(bg)}"],
     check=True
   )
   return bg
@@ -33,7 +33,7 @@ def convert_bed_to_bedgraph(
     async_results = []
     for bed in bed_list:
       prefix = os.path.basename(bed).removesuffix('.bed')
-      ar = pool.apply_async(bed_to_bedgraph, kwargs={"bed": bed, "prefix": prefix,"bg_dir": out_dir, "chrom_sizes": chrom_sizes})
+      ar = pool.apply_async(bed_to_bedgraph, args=(bed, prefix, out_dir, chrom_sizes))
       async_results.append((prefix, ar))
     
     bedgraph_list = []
@@ -42,7 +42,9 @@ def convert_bed_to_bedgraph(
         bedgraph_list.append(ar.get())
       except Exception as e:
         print(f"Failed: {prefix} -> {e}")
-
+        pool.terminate()
+        return None
+      
   return bedgraph_list
 
 

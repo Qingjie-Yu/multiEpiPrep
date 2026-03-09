@@ -1,6 +1,6 @@
 import os
 import subprocess
-from typing import List, Dict, Tuple, Optional
+from typing import List, Tuple
 from .utils import get_files_path, get_files_prefix
 
 def count_mapped_reads(bam: str) -> int:

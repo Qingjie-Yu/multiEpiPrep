@@ -46,7 +46,7 @@ def convert_bam_to_bed(
     async_results = []
     for bam in bam_list:
       prefix = os.path.basename(bam).removesuffix('.bam')
-      ar = pool.apply_async(bam_to_bed, kwargs={"bam": bam, "prefix": prefix, "bed_dir": out_dir})
+      ar = pool.apply_async(bam_to_bed, args=(bam, prefix, out_dir))
       async_results.append((prefix, ar))
 
     bed_list = []
@@ -55,6 +55,8 @@ def convert_bam_to_bed(
         bed_list.append(ar.get())
       except Exception as e:
         print(f"Failed: {prefix} -> {e}")
+        pool.terminate()
+        return None
 
   return bed_list
 
@@ -67,7 +69,7 @@ Required:
   -o, --output    Output directory where final BED files will be written
 
 Optional:
-  -j, --threads   Number of CPU threads for Bowtie2 and samtools operations
+  -j, --threads   Number of parallel BAM conversion jobs
                   (default: automatically detect all available CPU cores)
 
 Output:
