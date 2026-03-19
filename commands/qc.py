@@ -35,18 +35,17 @@ def compute_overlap_ratio(bam_path: str, prefix: str, ref_gr: pr.PyRanges) -> di
                 "ReadID": read.query_name
             })
 
-    total_reads = len(rows)
-    if total_reads == 0:
-        return {"prefix": prefix, "total_reads": 0, "overlap_reads": 0, "overlap_ratio": 0.0}
+    read_count = len(rows)
+    if read_count == 0:
+        return {"pair": prefix, "read_count": 0, "overlap_ratio": 0.0}
 
     read_gr = pr.PyRanges(pd.DataFrame(rows))
     overlap_reads = len(read_gr.join(ref_gr).df["ReadID"].unique())
 
     return {
-        "prefix": prefix,
-        "total_reads": total_reads,
-        "overlap_reads": overlap_reads,
-        "overlap_ratio": overlap_reads / total_reads
+        "pair": prefix,
+        "read_count": read_count,
+        "overlap_ratio": overlap_reads / read_count
     }
 
 
@@ -56,7 +55,7 @@ def qc(
     ref_genome: str,
     source: str = "ccre",
     exclude: List[str] = ["unknown", "IgG_control"],
-    min_reads: int = 1000,
+    percentile: float = 0.25,
     min_ratio: float = 0.0,
     threads: Optional[int] = None
 ):
@@ -78,8 +77,8 @@ def qc(
         Feature set to overlap against: 'ccre' or 'dhs'. Default 'ccre'.
     exclude : list of str
         Sample name tokens to exclude from analysis.
-    min_reads : int
-        Minimum total read count to pass QC. Default 1000.
+    percentile : float
+        Percentile threshold for filtering (default: 0.25)
     min_ratio : float
         Minimum overlap ratio to pass QC. Default 0.0 (no filter).
     threads : int, optional
@@ -134,12 +133,14 @@ def qc(
                 pool.terminate()
                 return None
 
-    all_rows.sort(key=lambda x: x["total_reads"], reverse=True)
-    all_df = pd.DataFrame(all_rows, columns=["prefix", "total_reads", "overlap_reads", "overlap_ratio"])
+    all_rows.sort(key=lambda x: x["read_count"], reverse=True)
+    all_df = pd.DataFrame(all_rows, columns=["pair", "read_count", "overlap_ratio"])
     all_df.to_csv(all_tsv, sep="\t", index=False)
 
+    counts_sorted = sorted(all_df["read_count"])
+    threshold = counts_sorted[int((len(counts_sorted) - 1) * percentile)]
     filtered_df = all_df[
-        (all_df["total_reads"] >= min_reads) &
+        (all_df["read_count"] > threshold) &
         (all_df["overlap_ratio"] >= min_ratio)
     ]
     filtered_df.to_csv(filtered_tsv, sep="\t", index=False)
@@ -157,8 +158,8 @@ Required:
 
 Optional:
   -s, --source      Reference feature set to overlap against: ccre or dhs (default: ccre)
-  -r, --min-reads   Minimum total mapped reads to pass QC (default: 1000)
-  -R, --min-ratio   Minimum overlap ratio to pass QC (default: 0.0, no filter)
+  -p, --percentile  Percentile threshold for filtering (default: 0.25)
+  -r, --min-ratio   Minimum overlap ratio to pass QC (default: 0.0, no filter)
   -e, --exclude     Comma-separated list of sample name tokens to exclude
                     (default: unknown,IgG_control). Exclusion matches substrings
                     in BAM filename prefixes. Pass an empty string to disable.
@@ -181,8 +182,8 @@ def register_parser(parser):
     parser.add_argument("-o", "--output", required=True, metavar="OUT_DIR")
     parser.add_argument("-g", "--genome", required=True, choices=["hg38", "mm10"], metavar="GENOME")
     parser.add_argument("-s", "--source", default="ccre", choices=["ccre", "dhs"], metavar="SOURCE")
-    parser.add_argument("-r", "--min-reads", type=int, default=1000, metavar="N", dest="min_reads")
-    parser.add_argument("-R", "--min-ratio", type=float, default=0.0, metavar="RATIO", dest="min_ratio")
+    parser.add_argument("-p", "--percentile", type=float, default=0.25, metavar="FLOAT", dest="percentile")
+    parser.add_argument("-r", "--min-ratio", type=float, default=0.0, metavar="RATIO", dest="min_ratio")
     parser.add_argument("-e", "--exclude",
                         type=lambda s: s.split(",") if s else [],
                         default="unknown,IgG_control",
@@ -199,7 +200,7 @@ def run(args):
         ref_genome=args.genome,
         source=args.source,
         exclude=exclude,
-        min_reads=args.min_reads,
+        percentile=args.percentile,
         min_ratio=args.min_ratio,
         threads=args.threads
     )
