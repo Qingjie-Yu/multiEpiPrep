@@ -1,117 +1,205 @@
 import os
-import subprocess
-from typing import List, Tuple
-from .utils import get_files_path, get_files_prefix
+import pysam
+from multiprocessing import Pool
+from typing import List, Optional
+import pandas as pd
+import pyranges as pr
+from .utils import download_bed, get_files_path, get_files_prefix, get_cpu_core
 
-def count_mapped_reads(bam: str) -> int:
-  proc = subprocess.check_output(["samtools", "idxstats", bam], text=True)
-  total = 0
-  for line in proc.splitlines():
-    parts = line.split("\t")
-    if len(parts) >= 3:
-      try:
-        total += int(parts[2])
-      except ValueError:
-        pass
-  return total
 
-def write_readcount_tsv(path: str, rows: List[Tuple[str, str, int]], target_col = "pair", read_count_col = "read_count") -> None:
-  with open(path, "w", encoding="utf-8") as f:
-    f.write(f"{target_col}\t{read_count_col}\n")
-    for _, prefix, count in rows:
-      f.write(f"{prefix}\t{count}\n")
+def load_reference_bed(bed_path) -> set:
+    """Load reference BED as a set of (chrom, start, end) intervals for fast lookup,
+    backed by PyRanges for overlap queries."""
+    ref = pd.read_csv(
+        bed_path,
+        sep="\t",
+        header=None,
+        usecols=[0, 1, 2],
+        names=["Chromosome", "Start", "End"]
+    )
+    return pr.PyRanges(ref)
 
-def qc_by_percentile(
-  bam_dir: str,
-  out_dir: str,
-  percentile: float = 0.25,
-  exclude: List[str] = ["unknown", "IgG_control"]
+
+def compute_overlap_ratio(bam_path: str, prefix: str, ref_gr: pr.PyRanges) -> dict:
+    """Count reads in BAM and compute fraction overlapping reference regions.
+    """
+    rows = []
+    with pysam.AlignmentFile(bam_path, "rb") as bam:
+        for read in bam.fetch(until_eof=True):
+            if read.is_unmapped or read.is_secondary or read.is_supplementary:
+                continue
+            rows.append({
+                "Chromosome": bam.get_reference_name(read.reference_id),
+                "Start": read.reference_start,
+                "End": read.reference_end,
+                "ReadID": read.query_name
+            })
+
+    total_reads = len(rows)
+    if total_reads == 0:
+        return {"prefix": prefix, "total_reads": 0, "overlap_reads": 0, "overlap_ratio": 0.0}
+
+    read_gr = pr.PyRanges(pd.DataFrame(rows))
+    overlap_reads = len(read_gr.join(ref_gr).df["ReadID"].unique())
+
+    return {
+        "prefix": prefix,
+        "total_reads": total_reads,
+        "overlap_reads": overlap_reads,
+        "overlap_ratio": overlap_reads / total_reads
+    }
+
+
+def qc(
+    bam_dir: str,
+    out_dir: str,
+    ref_genome: str,
+    source: str = "ccre",
+    exclude: List[str] = ["unknown", "IgG_control"],
+    min_reads: int = 1000,
+    min_ratio: float = 0.0,
+    threads: Optional[int] = None
 ):
-  if not (0.0 <= percentile <= 1.0):
-    raise ValueError("percentile must be between 0 and 1")
-  
-  os.makedirs(out_dir, exist_ok=True)
-  all_tsv = os.path.join(out_dir, "all_read_count.tsv")
-  filtered_tsv = os.path.join(out_dir, "filtered_read_count.tsv")
+    """Compute per-sample read overlap QC and filter by read count and overlap ratio.
 
-  bam_list = get_files_path(bam_dir, ext = ".bam")
-  prefix_list = get_files_prefix(bam_list,'.bam')
-  has_dash = ["-" in prefix for prefix in prefix_list]
+    For each BAM in `bam_dir` (excluding specified prefixes), counts total mapped
+    reads and the fraction overlapping a reference feature set (cCRE or DHS).
+    Writes two TSVs: one with all samples, one with samples passing both filters.
 
-  if all(has_dash):
-    mode = "all_dash"
-    should_exclude = [any(p in exclude for p in prefix.split("-")) for prefix in prefix_list]
-  elif not any(has_dash):
-    mode = "no_dash"
-    should_exclude = [prefix in exclude for prefix in prefix_list]
-  else:
-    mode = "mixed"
-    should_exclude = [any(item in prefix for item in exclude) for prefix in prefix_list]
+    Parameters
+    ----------
+    bam_dir : str
+        Directory containing input BAM files.
+    out_dir : str
+        Directory for output TSV files.
+    ref_genome : str
+        Reference genome; must be 'hg38' or 'mm10'.
+    source : str
+        Feature set to overlap against: 'ccre' or 'dhs'. Default 'ccre'.
+    exclude : list of str
+        Sample name tokens to exclude from analysis.
+    min_reads : int
+        Minimum total read count to pass QC. Default 1000.
+    min_ratio : float
+        Minimum overlap ratio to pass QC. Default 0.0 (no filter).
+    threads : int, optional
+        Worker processes for parallel BAM processing. Defaults to min(32, nCPU).
+    """
+    if ref_genome not in ["hg38", "mm10"]:
+        raise ValueError("Only hg38 or mm10 supported for ref_genome")
 
-  prefix_to_bam = {
-      prefix: bam
-      for prefix, bam, _exclude in zip(prefix_list, bam_list, should_exclude) if not _exclude
-  }
+    if source.lower() == "dhs":
+        ref_gr = load_reference_bed(download_bed(f"DHS_{ref_genome}.bed"))
+    elif source.lower() == "ccre":
+        ref_gr = load_reference_bed(download_bed(f"ENCODE_cCRE_v4_{ref_genome}.bed"))
+    else:
+        raise ValueError(f"Unknown source '{source}': choose 'ccre' or 'dhs'")
 
-  try: 
-    # Get all read counts
-    rows = [
-        (bam, prefix, count_mapped_reads(bam))
-        for prefix, bam in prefix_to_bam.items()
-      ]
-    rows = sorted(rows, key=lambda x: x[2], reverse=True) 
-    write_readcount_tsv(all_tsv, rows)
-    
-    # Filter read counts
-    counts_sorted = sorted([c for _, _, c in rows])
-    threshold = counts_sorted[int((len(counts_sorted)-1)*percentile)]
-    filtered_rows = [(bam, prefix, c) for bam, prefix, c in rows if c > threshold]
-    write_readcount_tsv(filtered_tsv, filtered_rows)
+    os.makedirs(out_dir, exist_ok=True)
+    all_tsv = os.path.join(out_dir, "all_qc.tsv")
+    filtered_tsv = os.path.join(out_dir, "filtered_qc.tsv")
 
-    # Get passed .bam files
-    filtered_bam_list = [bam for bam, _, _ in filtered_rows]
-  
-  except Exception as e:
-    print(e)
-    return None
+    bam_list = get_files_path(bam_dir, ext=".bam")
+    prefix_list = get_files_prefix(bam_list, ".bam")
+    has_dash = ["-" in p for p in prefix_list]
 
-  return filtered_bam_list
+    if all(has_dash):
+        should_exclude = [any(tok in exclude for tok in p.split("-")) for p in prefix_list]
+    elif not any(has_dash):
+        should_exclude = [p in exclude for p in prefix_list]
+    else:
+        should_exclude = [any(item in p for item in exclude) for p in prefix_list]
+
+    prefix_to_bam = {
+        prefix: bam
+        for prefix, bam, skip in zip(prefix_list, bam_list, should_exclude)
+        if not skip
+    }
+
+    if threads is None:
+        threads = min(32, get_cpu_core())
+
+    with Pool(processes=threads) as pool:
+        async_results = {
+            prefix: pool.apply_async(compute_overlap_ratio, args=(bam, prefix, ref_gr))
+            for prefix, bam in prefix_to_bam.items()
+        }
+
+        all_rows = []
+        for prefix, ar in async_results.items():
+            try:
+                all_rows.append(ar.get())
+            except Exception as e:
+                print(f"Failed: {prefix} -> {e}")
+                pool.terminate()
+                return None
+
+    all_rows.sort(key=lambda x: x["total_reads"], reverse=True)
+    all_df = pd.DataFrame(all_rows, columns=["prefix", "total_reads", "overlap_reads", "overlap_ratio"])
+    all_df.to_csv(all_tsv, sep="\t", index=False)
+
+    filtered_df = all_df[
+        (all_df["total_reads"] >= min_reads) &
+        (all_df["overlap_ratio"] >= min_ratio)
+    ]
+    filtered_df.to_csv(filtered_tsv, sep="\t", index=False)
+
+    print(f"Total samples: {len(all_df)}, passed QC: {len(filtered_df)}")
+    return
 
 HELP = """
-Perform read-count-based quality control on BAM files.
+Perform read-overlap-based quality control on BAM files.
 
 Required:
   -i, --input       Directory containing input BAM files
   -o, --output      Output directory for QC results
+  -g, --genome      Reference genome: hg38 or mm10
 
 Optional:
-  -p, --percentile  Percentile threshold for filtering (default: 0.25)
-  -e, --exclude     Comma-separated list of CRF names to exclude (default: unknown,IgG_control)
-                    Exclusion is performed by matching substrings in BAM filenames. If -e/--exclude is provided without a value, the exclude list is empty.
+  -s, --source      Reference feature set to overlap against: ccre or dhs (default: ccre)
+  -r, --min-reads   Minimum total mapped reads to pass QC (default: 1000)
+  -R, --min-ratio   Minimum overlap ratio to pass QC (default: 0.0, no filter)
+  -e, --exclude     Comma-separated list of sample name tokens to exclude
+                    (default: unknown,IgG_control). Exclusion matches substrings
+                    in BAM filename prefixes. Pass an empty string to disable.
+  -t, --threads     Number of parallel worker processes (default: min(32, nCPU))
 
 Description:
-  Computes the total number of mapped reads for each BAM file belonging to one specific sample by running `samtools idxstats`. Based on the resulting read counts, BAM files are filtered using a rank-based percentile threshold, discarding low-coverage files while retaining those above the cutoff.
+  For each BAM file in the input directory, counts total mapped reads and computes
+  the fraction overlapping a reference feature set (ENCODE cCRE v4 or DHS). Two
+  TSV files are written to the output directory:
+    all_qc.tsv      - QC stats for all non-excluded samples
+    filtered_qc.tsv - Samples passing both --min-reads and --min-ratio thresholds
 
 Example:
-  multiEpiPrep qc -i BAM_DIR -o OUT_DIR
+  multiEpiPrep qc -i BAM_DIR -o OUT_DIR -g hg38
+  multiEpiPrep qc -i BAM_DIR -o OUT_DIR -g mm10 -s dhs -r 5000 -R 0.2 -e IgG_control
 """
 
 def register_parser(parser):
-  parser.add_argument("-i", "--input", required=True)
-  parser.add_argument("-o", "--output", required=True)
-  parser.add_argument("-p", "--percentile", type=float, default=0.25)
-  parser.add_argument(
-    "-e", "--exclude",
-    type=lambda s: s.split(",") if s else [],
-    default="unknown,IgG_control",
-    metavar="NAMES"
-  )
-  parser.set_defaults(func=run)
+    parser.add_argument("-i", "--input", required=True, metavar="BAM_DIR")
+    parser.add_argument("-o", "--output", required=True, metavar="OUT_DIR")
+    parser.add_argument("-g", "--genome", required=True, choices=["hg38", "mm10"], metavar="GENOME")
+    parser.add_argument("-s", "--source", default="ccre", choices=["ccre", "dhs"], metavar="SOURCE")
+    parser.add_argument("-r", "--min-reads", type=int, default=1000, metavar="N", dest="min_reads")
+    parser.add_argument("-R", "--min-ratio", type=float, default=0.0, metavar="RATIO", dest="min_ratio")
+    parser.add_argument("-e", "--exclude",
+                        type=lambda s: s.split(",") if s else [],
+                        default="unknown,IgG_control",
+                        metavar="NAMES")
+    parser.add_argument("-t", "--threads", type=int, default=None, metavar="N")
+    parser.set_defaults(func=run)
+
 
 def run(args):
-  qc_by_percentile(
-    bam_dir=args.input,
-    out_dir=args.output,
-    percentile=args.percentile,
-    exclude=args.exclude
-  )
+    exclude = args.exclude if isinstance(args.exclude, list) else args.exclude.split(",")
+    qc(
+        bam_dir=args.input,
+        out_dir=args.output,
+        ref_genome=args.genome,
+        source=args.source,
+        exclude=exclude,
+        min_reads=args.min_reads,
+        min_ratio=args.min_ratio,
+        threads=args.threads
+    )

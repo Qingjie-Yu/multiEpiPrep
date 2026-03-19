@@ -1,4 +1,4 @@
-import os, re, gzip, shutil, psutil, subprocess
+import os, re, gzip, time, shutil, zipfile, psutil, hashlib, requests, subprocess
 
 def get_cpu_core():
     """Get the number of CPU cores available on the system"""
@@ -250,3 +250,61 @@ def get_picard_jar_path():
     else:
         print(f"Error: jar file does not exist in the expected location {jar_path}")
         return None
+
+def download_bed(bed_name, release_tag="data-v1", force=True):
+    BED_SHA256 = {
+        'DHS_hg38.bed': '1e51ccb3abb24eabea80db545ac5dcddd03c1422fd1db2e90836c74d1aecdd08',
+        'ENCODE_cCRE_v4_hg38.bed': '2bc679b35bab154fd1d8920c7078df9e3ca6c8c39568f8bf8ef1d0e01fb29f3d',
+        'ENCODE_cCRE_v4_mm10.bed': '0c1bee03e5306c15f423e2e370b8f37f374a9552c6bfaef32f220f1b040feaa0'
+    }
+
+    def sha256sum(path):
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
+    if bed_name not in BED_SHA256:
+        raise ValueError(f"Unknown file: {bed_name}")
+    
+    cache_dir = os.path.expanduser("~/.cache/multiEpiPrep")
+    os.makedirs(cache_dir, exist_ok=True)
+
+    zip_name = bed_name.replace(".bed", ".zip")
+    zip_path = os.path.join(cache_dir, zip_name)
+    bed_path = os.path.join(cache_dir, bed_name)
+
+    base_url = f"https://github.com/Qingjie-Yu/multiEpiPrep/releases/download/{release_tag}"
+    zip_url = f"{base_url}/{zip_name}"
+
+    if (not force) and os.path.exists(bed_path):
+        if sha256sum(bed_path) == BED_SHA256[bed_name]:
+            return os.path.abspath(bed_path)
+    
+    max_try = 3
+    for i in range(max_try):
+        try:
+            r = requests.get(zip_url, stream=True)
+            r.raise_for_status()
+
+            with open(zip_path, "wb") as f:
+                for chunk in r.iter_content(8192):
+                    f.write(chunk)
+            with zipfile.ZipFile(zip_path, "r") as z:
+                z.extractall(cache_dir)
+
+            if not os.path.exists(bed_path):
+                raise RuntimeError("Unzipped bed not found")
+            if sha256sum(bed_path) != BED_SHA256[bed_name]:
+                raise RuntimeError("sha256 mismatch")
+
+            os.remove(zip_path)
+            return os.path.abspath(bed_path)
+
+        except Exception:
+            for f in [zip_path, bed_path]:
+                if os.path.exists(f):
+                    os.remove(f)
+            time.sleep(2 ** i)
+    raise RuntimeError(f"Failed to download {bed_name}")
