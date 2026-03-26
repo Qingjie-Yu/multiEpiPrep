@@ -4,26 +4,58 @@ import subprocess
 from typing import Optional
 from multiprocessing import Pool
 from .utils import get_files_path, get_cpu_core
-  
+
+def is_paired_bam(bam):
+  result = subprocess.run(
+    ["samtools", "view", "-c", "-f", "1", bam],
+    capture_output=True,
+    text=True,
+    check=True
+  )
+  return int(result.stdout.strip()) > 0
+
 def bam_to_bed(bam, prefix, bed_dir):
   sort_bam = os.path.join(bed_dir, f"{prefix}.sort.bam")
   bedpe = os.path.join(bed_dir, f"{prefix}.bedpe")
   tmp_bed = os.path.join(bed_dir, f"{prefix}.tmp.bed")
   bed = os.path.join(bed_dir, f"{prefix}.bed")
 
-  subprocess.run(["samtools", "sort", "-n", bam, "-o", sort_bam], check=True)
   subprocess.run(
-    ["bash", "-c", f"bedtools bamtobed -i {shlex.quote(sort_bam)} -bedpe > {shlex.quote(bedpe)}"],
+    ["samtools", "sort", "-n", bam, "-o", sort_bam], 
     check=True
   )
-  subprocess.run(
-    ["bash", "-c",
-      f"""awk 'BEGIN{{OFS="\\t"}} NF>=6 && $1==$4 {{print $1,$2,$6}}' {shlex.quote(bedpe)} > {shlex.quote(tmp_bed)}"""
-    ],
-    check=True
-  )
-  subprocess.run(["sort", "-k", "1,1", "-k", "2,2n", tmp_bed, "-o", bed], check=True)
+  paired = is_paired_bam(bam)
 
+  if paired: 
+    # paired-end: name sort required
+    subprocess.run(
+      ["bash", "-c",
+      f"bedtools bamtobed -i {shlex.quote(sort_bam)} -bedpe > {shlex.quote(bedpe)}"],
+      check=True
+    )
+    subprocess.run(
+      [
+        "bash", "-c",
+        f"""awk 'BEGIN{{OFS="\\t"}} NF>=6 && $1==$4 {{print $1,$2,$6}}' {shlex.quote(bedpe)} > {shlex.quote(tmp_bed)}"""
+      ],
+      check=True
+    )
+  else:
+    # single-end: coordinate sort not required
+    subprocess.run(
+      [
+        "bash", "-c",
+        f"""bedtools bamtobed -i {shlex.quote(sort_bam)} | awk 'BEGIN{{OFS="\\t"}} {{print $1,$2,$3}}' > {shlex.quote(tmp_bed)}"""
+      ],
+      check=True
+    )
+  
+  subprocess.run(
+    ["sort", "-k1,1", "-k2,2n", tmp_bed, "-o", bed],
+    check=True
+  )
+
+  # cleanup
   for p in [sort_bam, bedpe, tmp_bed]:
     if os.path.exists(p):
       os.remove(p)
