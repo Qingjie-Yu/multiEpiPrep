@@ -63,10 +63,16 @@ def qc_by_percentile(
     write_readcount_tsv(all_tsv, rows)
     
     # Filter read counts
-    counts_sorted = sorted([c for _, _, c in rows])
-    threshold = counts_sorted[int((len(counts_sorted)-1)*percentile)]
-    filtered_rows = [(bam, prefix, c) for bam, prefix, c in rows if c > threshold]
-    write_readcount_tsv(filtered_tsv, filtered_rows)
+    if percentile == 0.0:
+      filtered_rows = rows
+      print(f"Total samples: {len(rows)}, no filtering applied")
+      
+    else:
+      counts_sorted = sorted([c for _, _, c in rows])
+      threshold = counts_sorted[int((len(counts_sorted)-1)*percentile)]
+      filtered_rows = [(bam, prefix, c) for bam, prefix, c in rows if c >= threshold]
+      write_readcount_tsv(filtered_tsv, filtered_rows)
+      print(f"Total samples: {len(rows)}, pass QC: {len(filtered_rows)} (threshold: {threshold})")
 
     # Get passed .bam files
     filtered_bam_list = [bam for bam, _, _ in filtered_rows]

@@ -137,13 +137,17 @@ def qc(
     all_df = pd.DataFrame(all_rows, columns=["pair", "read_count", "overlap_ratio"])
     all_df.to_csv(all_tsv, sep="\t", index=False)
 
-    counts_sorted = sorted(all_df["read_count"])
-    threshold = counts_sorted[int((len(counts_sorted) - 1) * percentile)]
-    filtered_df = all_df[
-        (all_df["read_count"] > threshold) &
-        (all_df["overlap_ratio"] >= min_ratio)
-    ]
-    filtered_df.to_csv(filtered_tsv, sep="\t", index=False)
+    if percentile == 0 and min_ratio == 0.0:
+        print(f"Total samples: {len(all_df)}, no filtering applied")
+    else:
+        counts_sorted = sorted(all_df["read_count"])
+        threshold = counts_sorted[int((len(counts_sorted) - 1) * percentile)]
+        filtered_df = all_df[
+            (all_df["read_count"] >= threshold) &
+            (all_df["overlap_ratio"] >= min_ratio)
+        ]
+        filtered_df.to_csv(filtered_tsv, sep="\t", index=False)
+        print(f"Total samples: {len(all_df)}, passed QC: {len(filtered_df)}")
 
     print(f"Total samples: {len(all_df)}, passed QC: {len(filtered_df)}")
     return
