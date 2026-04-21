@@ -148,8 +148,6 @@ def qc(
         ]
         filtered_df.to_csv(filtered_tsv, sep="\t", index=False)
         print(f"Total samples: {len(all_df)}, passed QC: {len(filtered_df)}")
-
-    print(f"Total samples: {len(all_df)}, passed QC: {len(filtered_df)}")
     return
 
 HELP = """

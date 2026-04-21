@@ -63,10 +63,38 @@ def bam_to_bed(bam, prefix, bed_dir):
   return bed
 
 
+def merge_by_crf(pair_beds, out_dir):
+  from collections import defaultdict
+  crf_to_beds = defaultdict(list)
+  for bed in pair_beds:
+    prefix = os.path.basename(bed).removesuffix('.bed')
+    for crf in prefix.split('-'):
+      crf_to_beds[crf].append(bed)
+
+  crf_beds = []
+  for crf, beds in crf_to_beds.items():
+    crf_bed = os.path.join(out_dir, f"{crf}.bed")
+    cat = " ".join(shlex.quote(b) for b in beds)
+    subprocess.run(
+      ["bash", "-c", f"cat {cat} | sort -k1,1 -k2,2n -o {shlex.quote(crf_bed)}"],
+      check=True
+    )
+    crf_beds.append(crf_bed)
+
+  # remove intermediate pair BED files that were split
+  for bed in pair_beds:
+    prefix = os.path.basename(bed).removesuffix('.bed')
+    if '-' in prefix and os.path.exists(bed):
+      os.remove(bed)
+
+  return crf_beds
+
+
 def convert_bam_to_bed(
   bam_dir: str,
   out_dir: str,
-  threads: Optional[int] = None
+  threads: Optional[int] = None,
+  split_crf: bool = False
 ):
   os.makedirs(out_dir, exist_ok=True)
 
@@ -90,6 +118,9 @@ def convert_bam_to_bed(
         pool.terminate()
         return None
 
+  if split_crf:
+    bed_list = merge_by_crf(bed_list, out_dir)
+
   return bed_list
 
 
@@ -101,6 +132,8 @@ Required:
   -o, --output    Output directory where final BED files will be written
 
 Optional:
+  -s, --split-crf Split paired BAM names (CRF1-CRF2) into per-CRF BED files;
+                  each BAM contributes to all CRFs found in its name
   -j, --threads   Number of parallel BAM conversion jobs
                   (default: automatically detect all available CPU cores)
 
@@ -122,12 +155,14 @@ def register_parser(parser):
   parser.add_argument("-i", "--input", required=True)
   parser.add_argument("-o", "--output", required=True)
   parser.add_argument("-j", "--threads", type=int, default=None)
+  parser.add_argument("-s", "--split-crf", action="store_true", default=False)
   parser.set_defaults(func=run)
 
 def run(args):
   convert_bam_to_bed(
     bam_dir=args.input,
     out_dir=args.output,
-    threads=args.threads
+    threads=args.threads,
+    split_crf=args.split_crf
   )
 

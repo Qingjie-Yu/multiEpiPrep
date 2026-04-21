@@ -66,7 +66,6 @@ def qc_by_percentile(
     if percentile == 0.0:
       filtered_rows = rows
       print(f"Total samples: {len(rows)}, no filtering applied")
-      
     else:
       counts_sorted = sorted([c for _, _, c in rows])
       threshold = counts_sorted[int((len(counts_sorted)-1)*percentile)]
