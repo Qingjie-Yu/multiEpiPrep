@@ -12,7 +12,6 @@ Usage:
   multiEpiPrep <command> [options]
 
 Commands:
-  barcode  Create forward and reverse barcode FASTA files from spreadsheet input
   demux    Demultiplex pooled FASTQ files into barcode-pair-specific FASTQ files
   adapt    Identify adapter structure and annotate read names with CB/UMI information
   align    Align FASTQ reads to the reference genome and generate BAM files
@@ -24,7 +23,6 @@ Commands:
 
 
 COMMANDS = {
-    "barcode": "commands.barcode",
     "demux": "commands.demux",
     "adapt": "commands.adapt",
     "align": "commands.align",
