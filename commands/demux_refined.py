@@ -1252,7 +1252,7 @@ def create_test_data(
 # =============================================================================
 
 
-def load_barcodes_from_tsv(filepath: str) -> List[BarcodeConfig]:
+def load_barcodes_from_table(filepath: str) -> List[BarcodeConfig]:
     """Load barcodes from a TSV file with intelligent column detection.
 
     Column resolution order:
@@ -1271,9 +1271,21 @@ def load_barcodes_from_tsv(filepath: str) -> List[BarcodeConfig]:
     if not raw_lines:
         raise ValueError(f"Empty barcode file: {filepath}")
 
-    header_parts = raw_lines[0].split('\t')
+    lower = filepath.lower()
+    if lower.endswith(".csv"):
+        sep = ","
+    elif lower.endswith(".tsv"):
+        sep = "\t"
+    else:
+        tab_count   = raw_lines[0].count('\t')
+        comma_count = raw_lines[0].count(',')
+        sep = '\t' if tab_count >= comma_count else ','
+        print(f"Warning: Ambiguous file extension for {filepath}, "
+            f"inferred delimiter: {'TAB' if sep == chr(9) else 'COMMA'}")
+    
+    header_parts = raw_lines[0].split(sep)
     col_names    = [c.lower().strip() for c in header_parts]
-    data_rows    = [ln.split('\t') for ln in raw_lines[1:] if ln.strip()]
+    data_rows    = [ln.split(sep) for ln in raw_lines[1:] if ln.strip()]
 
     if not data_rows:
         raise ValueError(f"No data rows in barcode file: {filepath}")
@@ -1382,14 +1394,14 @@ def load_barcodes_auto(filepath: str, json_key: str = 'r1_barcodes') -> List[Bar
     """
     lower = str(filepath).lower()
     fasta_exts = ('.fa', '.fasta', '.fa.gz', '.fasta.gz')
-    tsv_exts   = ('.tsv', '.txt', '.csv')
+    table_exts   = ('.tsv', '.csv')
 
     if lower.endswith('.json'):
         return _load_barcodes_from_json_key(filepath, json_key)
     if any(lower.endswith(ext) for ext in fasta_exts):
         return load_barcodes_from_fasta(filepath)
-    if any(lower.endswith(ext) for ext in tsv_exts):
-        return load_barcodes_from_tsv(filepath)
+    if any(lower.endswith(ext) for ext in table_exts):
+        return load_barcodes_from_table(filepath)
 
     # Ambiguous extension — peek at first non-whitespace character
     with open_file(filepath, 'r') as f:
@@ -1400,7 +1412,7 @@ def load_barcodes_auto(filepath: str, json_key: str = 'r1_barcodes') -> List[Bar
                     return _load_barcodes_from_json_key(filepath, json_key)
                 if stripped.startswith('>'):
                     return load_barcodes_from_fasta(filepath)
-                return load_barcodes_from_tsv(filepath)
+                return load_barcodes_from_table(filepath)
 
     raise ValueError(f"Cannot determine barcode file format for {filepath}.")
 
