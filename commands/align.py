@@ -34,7 +34,7 @@ def generate_clean_bam(
     f"-1 {shlex.quote(fastq_r1)} "
     f"-2 {shlex.quote(fastq_r2)} "
     f"| samtools view -@ {threads} -h -q 10 - "
-    r"""| awk 'BEGIN{OFS="\t"} /^@/ {print; next} ($3!="chrM" && $3 !~ /random/ && $3 !~ /^chrUn/) {print}' """
+    r"""| awk 'BEGIN{OFS="\t"} /^@/ {print; next} ($3~/^chr([0-9]+|X|Y)$/) {print}' """
     f"| samtools view -@ {threads} -b - "
     f"> {shlex.quote(bam_out)}"
   )
