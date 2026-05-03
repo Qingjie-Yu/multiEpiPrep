@@ -2,6 +2,7 @@ import os
 import pysam
 import shlex
 import subprocess
+from collections import defaultdict
 from typing import Optional, Tuple, List
 from .ref_prep import ref_prep
 from .utils import get_files_path, get_fastq_prefix, get_picard_jar_path, get_cpu_core, get_memory
@@ -234,6 +235,36 @@ def sort_and_index_bam(
   subprocess.run(["samtools", "index", bam_out], check=True)
   return bam_out
 
+def merge_bam_by_crf(
+  pair_bams: list[str], 
+  out_dir: str, 
+  threads: int = 1
+) -> list[str]:
+  pair_dir = os.path.join(out_dir, "pair")
+  os.makedirs(pair_dir, exist_ok=True)
+
+  crf_to_bams = defaultdict(list)
+  for bam in pair_bams:
+    prefix = os.path.basename(bam).removesuffix('.bam')
+    # move to pair subdirectory
+    new_bam = os.path.join(pair_dir, os.path.basename(bam))
+    cmd = f"mv {shlex.quote(os.path.join(out_dir, prefix))}* {shlex.quote(pair_dir)}/"
+    subprocess.run(["bash", "-c", cmd], check=True)
+    # 
+    crfs = prefix.split('-')
+    for crf in crfs:
+      crf_to_bams[crf].append(new_bam)
+  
+  crf_bams = []
+  for crf, bams in crf_to_bams.items():
+    crf_bam = os.path.join(out_dir, f"{crf}.bam")
+    merged_unsorted = f"{crf_bam}.merged.tmp.bam"
+    subprocess.run(["samtools", "cat", "-o", merged_unsorted] + bams, check=True)
+    sort_and_index_bam(merged_unsorted, crf_bam, threads=threads)
+    print(f"[merge_crf] {crf}: {len(bams)} input BAM(s) -> {crf_bam}")
+    crf_bams.append(crf_bam)
+
+  return crf_bams
 
 def run_alignment(
   fastq_r1: str,
@@ -300,6 +331,7 @@ def align(
   has_umi: bool = False,
   min_length: int = 10,
   max_length: int = 800,
+  merge_crf: bool = True,
   picard_jar: Optional[str] = None,
   java_mem: Optional[str] = None,
   threads: Optional[str] = None
@@ -332,7 +364,7 @@ def align(
   # Run
   fastq_list = get_files_path(fastq_dir, ext = ".fastq.gz")
   prefix_dict = get_fastq_prefix(fastq_list)
-  bam_list = []
+  pair_bams = []
 
   for prefix in prefix_dict.keys():
     print(f"Processing target: {prefix}")
@@ -342,12 +374,18 @@ def align(
 
     try:
       final_bam = run_alignment(fastq_r1=r1, fastq_r2=r2, group=prefix, out_prefix=out_prefix, index_prefix=index_prefix, min_length=min_length, max_length=max_length, cb_tag=cb_tag, umi_tag=umi_tag, threads=threads, java_mem=java_mem, picard_jar=picard_jar)
-      bam_list.append(final_bam)
+      pair_bams.append(final_bam)
       print(f"Successfully processed {prefix}")
     except Exception as e:
       print(f"Error processing {prefix}: {str(e)}")
       return 
-  return
+
+  # merge by CRF
+  if merge_crf:
+    crf_bams = merge_bam_by_crf(pair_bams, out_dir, threads=threads)
+    return crf_bams
+  else:
+    return pair_bams
 
 
 HELP = """
@@ -369,6 +407,9 @@ Optional:
   --max-len       Maximum fragment length accepted by Bowtie2 (-X flag). Pairs with inferred insert size above this threshold are discarded.
                   (default: 800)
 
+  --no-merge-crf  Disable per-CRF BAM merging. 
+                  By default, pair BAMs (e.g. A-B.  bam) are merged into per-CRF BAMs in the output directory, with pair BAMs retained under {output}/pair/. Use this flag to skip merging.
+                
   --java-mem      Java memory for Picard
                   (default: automatically detect available memory)
   --picard-jar    Path to picard.jar 
@@ -408,6 +449,7 @@ def register_parser(parser):
   parser.add_argument("--java-mem", type=str, default=None)
   parser.add_argument("--picard-jar", type=str, default=None)
   parser.add_argument("-j", "--threads", type=int, default=None)
+  parser.add_argument('--no-merge-crf', action='store_true')
   parser.set_defaults(func=run)
 
 def run(args):
@@ -419,6 +461,7 @@ def run(args):
     has_umi=args.umi,
     min_length=args.min_len,
     max_length=args.max_len,
+    merge_crf=not args.no_merge_crf,
     java_mem=args.java_mem,
     picard_jar=args.picard_jar,
     threads=args.threads

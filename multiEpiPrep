@@ -13,7 +13,7 @@ Usage:
 
 Commands:
   demux    Demultiplex pooled FASTQ files into barcode-pair-specific FASTQ files
-  adapt    Identify adapter structure and annotate read names with CB/UMI information
+  trim     Trim adapter sequences from FASTQ files
   align    Align FASTQ reads to the reference genome and generate BAM files
   qc       Perform quality control on BAM files
   frag     Convert aligned BAM files to fragment-level BED files
@@ -24,7 +24,7 @@ Commands:
 
 COMMANDS = {
     "demux": "commands.demux",
-    "adapt": "commands.adapt",
+    "trim": "commands.trim",
     "align": "commands.align",
     "qc": "commands.qc",
     "frag": "commands.frag",
