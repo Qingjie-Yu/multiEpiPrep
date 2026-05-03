@@ -260,7 +260,9 @@ def merge_bam_by_crf(
     crf_bam = os.path.join(out_dir, f"{crf}.bam")
     merged_unsorted = f"{crf_bam}.merged.tmp.bam"
     subprocess.run(["samtools", "cat", "-o", merged_unsorted] + bams, check=True)
-    sort_and_index_bam(merged_unsorted, crf_bam, threads=threads)
+    subprocess.run(["samtools", "sort", "-@", str(threads), "-o", crf_bam, merged_unsorted], check=True)
+    os.remove(merged_unsorted)
+    subprocess.run(["samtools", "index", crf_bam], check=True)
     print(f"[merge_crf] {crf}: {len(bams)} input BAM(s) -> {crf_bam}")
     crf_bams.append(crf_bam)
 
